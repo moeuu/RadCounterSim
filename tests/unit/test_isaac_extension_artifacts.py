@@ -12,7 +12,9 @@ def test_isaac_extension_declares_direct_host_dependencies() -> None:
         "omni.usd",
         "omni.timeline",
         "omni.physx",
+        "isaacsim.ros2.bridge",
     }
+    assert config["dependencies"]["isaacsim.ros2.bridge"]["optional"] is True
 
 
 def test_isaac_extension_contains_runtime_physics_and_embree_adapters() -> None:
