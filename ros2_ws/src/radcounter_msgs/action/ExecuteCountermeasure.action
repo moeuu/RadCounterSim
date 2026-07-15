@@ -1,0 +1,12 @@
+string action_id
+string action_type
+string robot_id
+string target_prim_path
+geometry_msgs/Pose target_pose
+string parameters_json
+---
+bool success
+radcounter_msgs/CountermeasureStatus final_status
+string message
+---
+radcounter_msgs/CountermeasureStatus status

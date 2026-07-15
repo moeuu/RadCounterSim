@@ -1,0 +1,28 @@
+{
+  "generated_at": "2026-07-15T00:28:19.820201+00:00",
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "x86_64",
+    "gpu": "NVIDIA GeForce RTX 5090, 580.159.03, 32607 MiB",
+    "os": "Linux-6.17.0-35-generic-x86_64-with-glibc2.39"
+  },
+  "runtime": {
+    "embree": {
+      "root": "/home/moeu/.local/embree/4.3.0/usr",
+      "version": "4.3.0"
+    },
+    "isaac_sim": {
+      "lock": "/home/moeu/.local/isaacsim/6.0.1-uv/uv.lock",
+      "root": "/home/moeu/.local/isaacsim/6.0.1-uv",
+      "version": "6.0.1.0"
+    },
+    "project_python": "3.12.12",
+    "python_environment_manager": "uv 0.10.0",
+    "ros_2": {
+      "distribution": "jazzy",
+      "python_lock": "/home/moeu/.local/ros2/python-runtime/uv.lock",
+      "release": "20260618",
+      "root": "/home/moeu/.local/ros2/jazzy"
+    }
+  }
+}

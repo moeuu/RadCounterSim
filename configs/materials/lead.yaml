@@ -1,0 +1,6 @@
+material_id: lead
+data_status: requires_validated_xcom_export
+provenance: NIST XCOM values must be exported and versioned before research use
+energies_keV: [100.0, 500.0, 1000.0]
+linear_attenuation_m_inv: [0.0, 0.0, 0.0]
+geometry_mode: solid

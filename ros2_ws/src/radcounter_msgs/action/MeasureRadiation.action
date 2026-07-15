@@ -1,0 +1,10 @@
+string detector_id
+float64 duration_s
+geometry_msgs/Pose target_pose
+---
+bool success
+radcounter_msgs/RadiationMeasurement measurement
+string message
+---
+float32 progress
+string state

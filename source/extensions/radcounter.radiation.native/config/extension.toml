@@ -1,0 +1,8 @@
+[package]
+version = "0.1.0"
+title = "RadCounterSim Radiation Native"
+description = "Embree transport backend; external runtime required"
+category = "Simulation"
+
+[[python.module]]
+name = "radcounter.radiation.native"

@@ -1,0 +1,10 @@
+string frame_id
+geometry_msgs/Point minimum
+geometry_msgs/Point maximum
+float64 resolution_m
+---
+bool success
+geometry_msgs/Point[] points
+float64[] dose_rate_sv_h
+uint64 scene_revision
+string message

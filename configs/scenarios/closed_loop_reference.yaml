@@ -1,0 +1,132 @@
+schema_version: "1.0.0"
+scenario:
+  id: closed_loop_reference
+  description: Closed-loop radiation estimation and countermeasure planning reference case.
+  world_frame: world
+  length_unit: m
+  activity_unit: Bq
+  dose_rate_unit: uSv/h
+  master_seed: 20260714
+
+runtime:
+  mode: analytic
+  radiation_backend: analytic_point_slab
+  robot_controller: deterministic
+  use_sim_time: true
+  fixed_step_s: 0.1
+
+truth:
+  access_policy: simulator_only
+  sources:
+    - source_id: fixed_source_a
+      geometry: point
+      position_m: [1.0, 0.6, 0.8]
+      isotope: Cs-137
+      activity_bq: 120000.0
+      attached_object_id: null
+    - source_id: object_source_b
+      geometry: surface
+      object_id: drum_a
+      isotope: Co-60
+      activity_bq: 65000.0
+      sampling_density_per_m2: 500
+  materials:
+    - object_id: concrete_wall
+      attenuation_coefficient_per_m:
+        Cs-137: 0.19
+        Co-60: 0.12
+    - object_id: mobile_shield
+      attenuation_coefficient_per_m:
+        Cs-137: 12.0
+        Co-60: 8.5
+  action_outcomes:
+    decon_zone_a:
+      removal_fraction: 0.62
+    place_mobile_shield:
+      translation_error_std_m: 0.025
+      rotation_error_std_deg: 1.5
+
+belief:
+  access_policy: planner_estimator_only
+  source_basis:
+    type: hybrid_grid_surface
+    grid_spacing_m: 0.25
+    candidate_isotopes: [Cs-137, Co-60]
+  source_strength_prior_bq:
+    distribution: lognormal
+    geometric_std: 2.0
+  background_rate_cps: [2.0, 1.5]
+  global_gain_prior:
+    mean: 1.0
+    standard_deviation: 0.08
+  shield_pose_covariance:
+    diagonal: [0.000625, 0.000625, 0.000625, 0.000685, 0.000685, 0.000685]
+
+sensors:
+  - sensor_id: gamma_detector_a
+    robot_id: measurement_robot
+    channels: [Cs-137_roi, Co-60_roi]
+    dwell_s: 4.0
+    dead_time_model: nonparalyzable
+    dead_time_s: 0.00001
+    quantum_efficiency: [0.42, 0.31]
+
+robots:
+  - robot_id: measurement_robot
+    role: measurement
+    controller: deterministic
+    home_position_m: [-2.0, -1.5, 0.0]
+  - robot_id: countermeasure_robot
+    role: countermeasure
+    controller: deterministic
+    home_position_m: [-2.0, 1.5, 0.0]
+
+countermeasures:
+  - action_id: decon_zone_a
+    type: decontamination
+    target_id: floor_zone_a
+    duration_s: 90.0
+    waste_generated_kg: 1.8
+  - action_id: place_mobile_shield
+    type: shield_placement
+    shield_id: mobile_shield
+    station_position_m: [0.1, 0.3, 0.0]
+    station_orientation_xyzw: [0.0, 0.0, 0.0, 1.0]
+    duration_s: 45.0
+    shield_mass_kg: 8.0
+  - action_id: move_drum_a
+    type: object_move
+    object_id: drum_a
+    destination_position_m: [-1.2, 1.0, 0.0]
+    duration_s: 70.0
+
+planning:
+  planner: closed_loop_residual
+  objective_weights:
+    residual_dose: 1.0
+    elapsed_time: 0.02
+    waste_mass: 0.3
+    shield_mass: 0.05
+    uncertainty: 0.5
+    execution_risk: 0.4
+  constraints:
+    mission_time_limit_s: 420.0
+    waste_limit_kg: 3.0
+    shield_mass_limit_kg: 8.0
+  verification:
+    required_after_every_action: true
+    residual_significance_threshold: 3.0
+    bic_improvement_threshold: 10.0
+
+termination:
+  target_max_dose_rate_usv_h: 20.0
+  maximum_iterations: 8
+  stop_on_resource_exhaustion: true
+  stop_on_no_feasible_action: true
+
+artifacts:
+  run_root: runs
+  write_parquet: true
+  write_npz_maps: true
+  write_html_report: true
+  immutable_snapshots: true

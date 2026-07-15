@@ -1,0 +1,10 @@
+std_msgs/Header header
+string measurement_id
+string detector_id
+geometry_msgs/Pose detector_pose
+float64 duration_s
+float64[] energy_bin_edges_kev
+uint32[] counts_per_bin
+float64 dose_rate_sv_h
+float64[] covariance_flat
+uint64 scene_revision

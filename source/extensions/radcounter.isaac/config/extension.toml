@@ -1,0 +1,19 @@
+[package]
+version = "0.2.0"
+title = "RadCounterSim"
+description = "Closed-loop radiation countermeasure simulation"
+category = "Simulation"
+keywords = ["isaac", "radiation", "robotics", "countermeasure"]
+
+[dependencies]
+"omni.kit.uiapp" = {}
+"omni.usd" = {}
+"omni.timeline" = {}
+"omni.physx" = { optional = true }
+"isaacsim.ros2.bridge" = { optional = true }
+
+[[python.module]]
+name = "radcounter.isaac"
+
+[settings]
+exts."radcounter.isaac".windowOpenByDefault = true

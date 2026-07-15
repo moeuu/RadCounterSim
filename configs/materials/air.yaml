@@ -1,0 +1,6 @@
+material_id: air
+data_status: synthetic_validation_only
+provenance: Zero-attenuation analytic CI material
+energies_keV: [1.0, 10000.0]
+linear_attenuation_m_inv: [0.0, 0.0]
+geometry_mode: solid

@@ -1,0 +1,15 @@
+/**:
+  ros__parameters:
+    use_sim_time: true
+    namespace: radcounter
+    action_timeout_s: 120.0
+    navigation_timeout_s: 300.0
+    manipulation_timeout_s: 180.0
+    measurement_qos:
+      reliability: reliable
+      durability: volatile
+      depth: 10
+    status_qos:
+      reliability: reliable
+      durability: transient_local
+      depth: 10

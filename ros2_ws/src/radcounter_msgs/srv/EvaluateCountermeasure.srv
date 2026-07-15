@@ -1,0 +1,11 @@
+string action_type
+string target_prim_path
+geometry_msgs/Pose target_pose
+string parameters_json
+---
+bool feasible
+float64 expected_task_path_dose_sv
+float64 expected_peak_dose_rate_sv_h
+float64 expected_information_gain
+float64 objective_score
+string message

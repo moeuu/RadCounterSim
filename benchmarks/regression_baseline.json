@@ -1,0 +1,26 @@
+{
+  "decontamination_primitive": {
+    "decontamination_efficiency_absolute_error": {"max": 0.08},
+    "passed": {"equals": true}
+  },
+  "shielding_primitive": {
+    "shield_transmission_absolute_error": {"max": 0.03},
+    "passed": {"equals": true}
+  },
+  "movable_contaminated_object": {
+    "localization_error_m": {"max": 0.2},
+    "passed": {"equals": true}
+  },
+  "hidden_source_residual": {
+    "bic_improvement": {"min": 10.0},
+    "hidden_source_localization_error_m": {"max": 0.25},
+    "passed": {"equals": true}
+  },
+  "closed_loop_vs_open_loop": {
+    "closed_loop_benefit_usv_h": {"min": 10.0},
+    "passed": {"equals": true}
+  },
+  "resource_constrained_multi_action": {
+    "passed": {"equals": true}
+  }
+}

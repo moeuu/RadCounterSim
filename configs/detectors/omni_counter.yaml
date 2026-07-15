@@ -1,0 +1,7 @@
+detector_id: omni-1
+data_status: synthetic_validation_only
+energy_bin_edges_keV: [0.0, 400.0, 600.0, 1000.0]
+efficiency_energy_keV: [1.0, 500.0, 1000.0]
+intrinsic_efficiency: [0.1, 0.1, 0.05]
+background_cps_per_bin: [0.1, 0.2, 0.1]
+dead_time_s: 0.000001

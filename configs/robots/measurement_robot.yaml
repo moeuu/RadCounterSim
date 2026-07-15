@@ -1,0 +1,4 @@
+robot_id: measurement-robot-1
+controller: deterministic
+detector_id: omni-1
+detector_extrinsic_xyz_m: [0.0, 0.0, 1.0]

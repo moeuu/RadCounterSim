@@ -1,0 +1,6 @@
+isotope_id: synthetic-500
+data_status: synthetic_validation_only
+provenance: RadCounterSim analytic test definition v1
+emission_lines:
+  - energy_keV: 500.0
+    photons_per_decay: 1.0
