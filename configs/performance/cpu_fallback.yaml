@@ -1,0 +1,29 @@
+profile: cpu_fallback
+duration_s: 600
+target_fps: 15
+minimum_acceptable_fps: 7
+viewport:
+  width_px: 800
+  height_px: 450
+  renderer: RaytracedLighting
+environment:
+  logical_size_m: 4000
+  tile_size_m: 50
+  maximum_resident_tiles: 18
+  initial_quality: minimal
+robots:
+  ugv_speed_m_s: 3.0
+  drone_speed_m_s: 8.0
+  drone_altitude_m: 7.0
+sensors:
+  lidar_model: Example_Rotary
+  lidar_tick_hz: 2.0
+  camera_tick_hz: 2.0
+  camera_width_px: 424
+  camera_height_px: 240
+  radiation_update_hz: 1.0
+mitigation:
+  shield_at_s: 200
+  water_decon_at_s: 400
+  lead_transmission: 0.04
+  retained_activity_after_water_decon: 0.35

@@ -1,0 +1,19 @@
+evidence_kind: synthetic_analytic
+source:
+  isotope: Cs-137
+  certificate_id: synthetic-not-a-certificate
+  activity_bq: 1000000
+  reference_date: 2026-01-01
+  photon_yield_per_decay: 0.85
+detector:
+  model: ideal-planar-counter
+  serial_number: synthetic
+  calibration_id: synthetic
+  calibration_date: 2026-01-01
+  active_area_m2: 0.1
+  intrinsic_efficiency: 0.5882352941176471
+geometry:
+  procedure_id: analytic-inverse-square
+environment:
+  temperature_c: 20
+notes: Pipeline fixture only. It is not physical validation evidence.

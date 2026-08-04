@@ -1,0 +1,10 @@
+tier: balanced
+interactive_renderer: RaytracedLighting
+capture_renderer: PathTracing
+capture_spp: 16
+max_bounces: 3
+resolution_scale: 0.85
+texture_budget_mb: 4096
+max_visual_tiles: 100
+volumetrics: true
+effect_particle_scale: 0.5

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from importlib import import_module
 from types import ModuleType
 
@@ -45,6 +45,11 @@ class TriangleMesh:
     vertices_m: NDArray[np.float64]
     triangles: NDArray[np.uint32]
     material_index: int
+    geometry_mode: str = "solid"
+    explicit_thickness_m: float | None = None
+    grazing_cosine_floor: float = 0.05
+    mesh_id: str | None = None
+    world_transform: NDArray[np.float64] = field(default_factory=lambda: np.eye(4))
 
     def __post_init__(self) -> None:
         vertices = np.asarray(self.vertices_m, dtype=np.float64)
@@ -57,8 +62,20 @@ class TriangleMesh:
             raise ValueError("triangle index is outside vertices_m")
         if self.material_index < 0:
             raise ValueError("material_index must be nonnegative")
+        if self.geometry_mode not in {"solid", "thin_sheet"}:
+            raise ValueError("geometry_mode must be solid or thin_sheet")
+        if self.geometry_mode == "thin_sheet" and (
+            self.explicit_thickness_m is None or self.explicit_thickness_m <= 0.0
+        ):
+            raise ValueError("thin_sheet meshes require positive explicit_thickness_m")
+        if not 0.0 < self.grazing_cosine_floor <= 1.0:
+            raise ValueError("grazing_cosine_floor must be in (0, 1]")
+        transform = np.asarray(self.world_transform, dtype=np.float64)
+        if transform.shape != (4, 4) or not np.all(np.isfinite(transform)):
+            raise ValueError("world_transform must have finite shape (4, 4)")
         object.__setattr__(self, "vertices_m", vertices)
         object.__setattr__(self, "triangles", triangles)
+        object.__setattr__(self, "world_transform", transform)
 
 
 @dataclass(frozen=True)
@@ -68,13 +85,28 @@ class RadiationTriangleMesh:
     vertices_m: NDArray[np.float64]
     triangles: NDArray[np.uint32]
     material_id: str
+    mesh_id: str | None = None
+    geometry_mode: str = "solid"
+    explicit_thickness_m: float | None = None
+    grazing_cosine_floor: float = 0.05
+    world_transform: NDArray[np.float64] = field(default_factory=lambda: np.eye(4))
 
     def __post_init__(self) -> None:
         if not self.material_id:
             raise ValueError("material_id must not be empty")
-        validated = TriangleMesh(self.vertices_m, self.triangles, 0)
+        validated = TriangleMesh(
+            self.vertices_m,
+            self.triangles,
+            0,
+            self.geometry_mode,
+            self.explicit_thickness_m,
+            self.grazing_cosine_floor,
+            self.mesh_id,
+            self.world_transform,
+        )
         object.__setattr__(self, "vertices_m", validated.vertices_m)
         object.__setattr__(self, "triangles", validated.triangles)
+        object.__setattr__(self, "world_transform", validated.world_transform)
 
 
 class EmbreeNativeScene:
@@ -92,13 +124,42 @@ class EmbreeNativeScene:
     def add_mesh(self, mesh: TriangleMesh) -> int:
         """Copy one mesh into native storage and return its geometry ID."""
 
-        geometry_id = self._scene.add_triangle_mesh(
+        arguments = (
             np.asarray(mesh.vertices_m, dtype=np.float32, order="C"),
             np.asarray(mesh.triangles, dtype=np.uint32, order="C"),
             mesh.material_index,
         )
+        try:
+            geometry_id = self._scene.add_triangle_mesh(
+                *arguments,
+                mesh.geometry_mode,
+                0.0 if mesh.explicit_thickness_m is None else mesh.explicit_thickness_m,
+                mesh.grazing_cosine_floor,
+            )
+        except TypeError:
+            geometry_id = self._scene.add_triangle_mesh(*arguments)
+        if not np.allclose(mesh.world_transform, np.eye(4)) and hasattr(
+            self._scene, "update_instance_transform"
+        ):
+            self._scene.update_instance_transform(
+                geometry_id,
+                np.asarray(mesh.world_transform, dtype=np.float64, order="C"),
+            )
         self._committed = False
         return int(geometry_id)
+
+    def update_instance_transform(
+        self, geometry_id: int, transform: NDArray[np.float64]
+    ) -> None:
+        matrix = np.asarray(transform, dtype=np.float64, order="C")
+        if matrix.shape != (4, 4) or not np.all(np.isfinite(matrix)):
+            raise ValueError("transform must have finite shape (4, 4)")
+        self._scene.update_instance_transform(geometry_id, matrix)
+        self._committed = False
+
+    def remove_geometry(self, geometry_id: int) -> None:
+        self._scene.remove_geometry(geometry_id)
+        self._committed = False
 
     def commit(self) -> None:
         self._scene.commit()
@@ -130,6 +191,24 @@ class EmbreeNativeScene:
             dtype=np.float64,
         )
 
+    def trace_path_lengths(
+        self,
+        origins_m: NDArray[np.float64],
+        targets_m: NDArray[np.float64],
+    ) -> NDArray[np.float64]:
+        if not self._committed:
+            raise RuntimeError("commit() must be called before tracing")
+        origins = np.asarray(origins_m, dtype=np.float64, order="C")
+        targets = np.asarray(targets_m, dtype=np.float64, order="C")
+        if origins.ndim != 2 or origins.shape[1] != 3 or targets.shape != origins.shape:
+            raise ValueError("origins_m and targets_m must have equal shape (N, 3)")
+        if not hasattr(self._scene, "trace_path_lengths"):
+            raise EmbreeNativeUnavailable("native module does not expose trace_path_lengths")
+        return np.asarray(
+            self._scene.trace_path_lengths(origins, targets),
+            dtype=np.float64,
+        )
+
 
 class EmbreeTransportBackend:
     """Drop-in ``RayTransportBackend`` implemented by Embree 4."""
@@ -138,6 +217,7 @@ class EmbreeTransportBackend:
         self._scene: EmbreeNativeScene | None = None
         self._materials = MaterialTable(())
         self._material_ids: tuple[str, ...] = ()
+        self._geometry_id_by_mesh_id: dict[str, int] = {}
 
     def build_scene(
         self,
@@ -154,24 +234,56 @@ class EmbreeTransportBackend:
             material_table.get(material_id)
         material_index = {material_id: index for index, material_id in enumerate(material_ids)}
         scene = EmbreeNativeScene()
-        for mesh in typed_meshes:
-            scene.add_mesh(
+        geometry_id_by_mesh_id: dict[str, int] = {}
+        for index, mesh in enumerate(typed_meshes):
+            mesh_id = mesh.mesh_id or f"mesh-{index}"
+            if mesh_id in geometry_id_by_mesh_id:
+                raise ValueError(f"duplicate radiation mesh ID: {mesh_id}")
+            geometry_id_by_mesh_id[mesh_id] = scene.add_mesh(
                 TriangleMesh(
                     mesh.vertices_m,
                     mesh.triangles,
                     material_index[mesh.material_id],
+                    mesh.geometry_mode,
+                    mesh.explicit_thickness_m,
+                    mesh.grazing_cosine_floor,
+                    mesh_id,
+                    mesh.world_transform,
                 )
             )
         scene.commit()
         self._scene = scene
         self._materials = material_table
         self._material_ids = material_ids
+        self._geometry_id_by_mesh_id = geometry_id_by_mesh_id
+
+    def update_instance_transform(
+        self, mesh_id: str, transform: NDArray[np.float64]
+    ) -> None:
+        if self._scene is None:
+            raise RuntimeError("build_scene() must be called before updates")
+        try:
+            geometry_id = self._geometry_id_by_mesh_id[mesh_id]
+        except KeyError as error:
+            raise KeyError(f"unknown radiation mesh ID: {mesh_id}") from error
+        self._scene.update_instance_transform(geometry_id, transform)
+
+    def remove_geometry(self, mesh_id: str) -> None:
+        if self._scene is None:
+            raise RuntimeError("build_scene() must be called before updates")
+        try:
+            geometry_id = self._geometry_id_by_mesh_id.pop(mesh_id)
+        except KeyError as error:
+            raise KeyError(f"unknown radiation mesh ID: {mesh_id}") from error
+        self._scene.remove_geometry(geometry_id)
 
     def commit_updates(self) -> int:
         """Return the committed native scene revision."""
 
         if self._scene is None:
             raise RuntimeError("build_scene() must be called before commit_updates()")
+        if not self._scene._committed:
+            self._scene.commit()
         return self._scene.revision
 
     def trace_path_lengths(
@@ -193,17 +305,22 @@ class EmbreeTransportBackend:
                 np.zeros((len(origins), 0), dtype=np.float64),
                 np.zeros(len(origins), dtype=np.bool_),
             )
-        identity_attenuation = np.eye(len(self._material_ids), dtype=np.float64)
-        material_transmission = self._scene.trace_transmission(
-            origins,
-            targets,
-            identity_attenuation,
-        )
-        lengths_m = -np.log(np.clip(material_transmission, np.finfo(np.float64).tiny, 1.0))
+        try:
+            lengths_m = self._scene.trace_path_lengths(origins, targets)
+        except EmbreeNativeUnavailable:
+            identity_attenuation = np.eye(len(self._material_ids), dtype=np.float64)
+            material_transmission = self._scene.trace_transmission(
+                origins,
+                targets,
+                identity_attenuation,
+            )
+            lengths_m = -np.log(
+                np.clip(material_transmission, np.finfo(np.float64).tiny, 1.0)
+            )
         return PathLengthBatch(
             self._material_ids,
             lengths_m,
-            np.zeros(len(origins), dtype=np.bool_),
+            np.any(lengths_m > 0.0, axis=1),
         )
 
     def trace_transmission(

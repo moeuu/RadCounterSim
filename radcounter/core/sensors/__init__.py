@@ -10,11 +10,57 @@ from radcounter.core.sensors.rotating import (
 )
 
 __all__ = [
+    "CallbackDetectorModel",
+    "DeadTimeModel",
+    "DetectorArray",
+    "DetectorDescriptor",
+    "DetectorFamily",
+    "DetectorOutput",
+    "DetectorPose",
+    "DetectorReading",
+    "DetectorRegistry",
     "DoseRateMeter",
+    "Directionality",
+    "ExternalDetectorModel",
+    "ExternalDetectorReadingBuffer",
     "MeasurementState",
     "OmnidirectionalCounter",
+    "ParametricDetectorModel",
+    "ParticleResponse",
+    "RadiationSample",
+    "RadiationType",
+    "ResponseCurve",
     "RotatingShieldCounter",
     "RotatingShieldMode",
     "ShieldProgram",
     "ShieldProgramMeasurement",
+    "ShieldPanel",
+    "load_detector_descriptor",
+    "popular_detector_catalog",
 ]
+
+# Generic multi-detector and plugin API.
+from .catalog import popular_detector_catalog
+from .plugins import (
+    CallbackDetectorModel,
+    DetectorRegistry,
+    ExternalDetectorModel,
+    ExternalDetectorReadingBuffer,
+    load_detector_descriptor,
+)
+from .universal import (
+    DeadTimeModel,
+    DetectorArray,
+    DetectorDescriptor,
+    DetectorFamily,
+    DetectorOutput,
+    DetectorPose,
+    DetectorReading,
+    Directionality,
+    ParametricDetectorModel,
+    ParticleResponse,
+    RadiationSample,
+    RadiationType,
+    ResponseCurve,
+    ShieldPanel,
+)

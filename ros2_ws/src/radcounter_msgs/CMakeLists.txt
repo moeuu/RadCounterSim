@@ -12,6 +12,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CountermeasureStatus.msg"
   "action/MeasureRadiation.action"
   "action/ExecuteCountermeasure.action"
+  "action/ExecuteRobotTask.action"
   "srv/GetDoseMap.srv"
   "srv/EvaluateCountermeasure.srv"
   "srv/ResetEpisode.srv"

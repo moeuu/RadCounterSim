@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!-- Original reference geometry based on Flyability Elios 3 RAD documentation. -->
+<robot name="elios3_rad_reference">
+  <material name="body"><color rgba="0.10 0.11 0.12 1"/></material>
+  <material name="cage"><color rgba="0.82 0.84 0.83 0.28"/></material>
+  <material name="rad"><color rgba="0.95 0.82 0.10 1"/></material>
+  <link name="base_link">
+    <inertial><mass value="2.465"/><inertia ixx="0.035" ixy="0" ixz="0" iyy="0.035" iyz="0" izz="0.045"/></inertial>
+    <visual><geometry><box size="0.25 0.11 0.085"/></geometry><material name="body"/></visual>
+    <visual><geometry><sphere radius="0.235"/></geometry><material name="cage"/></visual>
+    <collision><geometry><sphere radius="0.235"/></geometry></collision>
+    <visual><origin xyz="0.105 0.105 0"/><geometry><cylinder radius="0.078" length="0.012"/></geometry><material name="body"/></visual>
+    <visual><origin xyz="0.105 -0.105 0"/><geometry><cylinder radius="0.078" length="0.012"/></geometry><material name="body"/></visual>
+    <visual><origin xyz="-0.105 0.105 0"/><geometry><cylinder radius="0.078" length="0.012"/></geometry><material name="body"/></visual>
+    <visual><origin xyz="-0.105 -0.105 0"/><geometry><cylinder radius="0.078" length="0.012"/></geometry><material name="body"/></visual>
+  </link>
+  <link name="camera_link"><visual><geometry><box size="0.075 0.09 0.06"/></geometry><material name="body"/></visual></link>
+  <joint name="camera_fixed" type="fixed"><parent link="base_link"/><child link="camera_link"/><origin xyz="0.155 0 -0.015"/></joint>
+  <link name="lidar_link"><visual><geometry><cylinder radius="0.043" length="0.065"/></geometry><material name="body"/></visual></link>
+  <joint name="lidar_fixed" type="fixed"><parent link="base_link"/><child link="lidar_link"/><origin xyz="-0.015 0 -0.095"/></joint>
+  <link name="radiation_link"><visual><geometry><box size="0.14 0.062 0.052"/></geometry><material name="rad"/></visual></link>
+  <joint name="radiation_fixed" type="fixed"><parent link="base_link"/><child link="radiation_link"/><origin xyz="-0.105 0 -0.115"/></joint>
+</robot>

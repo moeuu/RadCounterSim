@@ -30,12 +30,12 @@ class RadCounterWindow:
     def __init__(self, callbacks: WindowCallbacks) -> None:
         ui = _ui_module()
         self._callbacks = callbacks
-        self._window = ui.Window("RadCounterSim", width=430, height=230)
+        self._window = ui.Window("RadCounterSim", width=520, height=250)
         self._stage_path_model = ui.SimpleStringModel("")
         self._status_model = ui.SimpleStringModel("State: empty")
         with self._window.frame, ui.VStack(spacing=8, height=0):
             ui.Label("Radiation countermeasure episode", height=24)
-            ui.Label("USD stage", height=18)
+            ui.Label("3D environment, USD stage, or import descriptor", height=18)
             ui.StringField(self._stage_path_model, height=26)
             with ui.HStack(spacing=6, height=30):
                 ui.Button(

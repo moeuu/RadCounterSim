@@ -1,0 +1,9 @@
+radcounter_robot_gateway:
+  ros__parameters:
+    navigate_action: /navigate_to_pose
+    move_group_action: /move_action
+    gripper_action: /gripper_controller/gripper_cmd
+    move_group: manipulator
+    end_effector_link: tool0
+    isaac_command_topic: /radcounter/isaac/command
+    isaac_result_topic: /radcounter/isaac/result

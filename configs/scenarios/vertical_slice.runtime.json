@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "scene": "assets/environments/radcounter_vertical_slice.usda",
+  "physics_data_class": "synthetic_validation_only",
+  "materials": {
+    "concrete": {
+      "energy_keV": [
+        80.0,
+        300.0,
+        661.657,
+        1500.0
+      ],
+      "mu_m_inv": [
+        34.0,
+        23.0,
+        18.0,
+        12.0
+      ]
+    },
+    "lead": {
+      "energy_keV": [
+        80.0,
+        300.0,
+        661.657,
+        1500.0
+      ],
+      "mu_m_inv": [
+        640.0,
+        210.0,
+        125.0,
+        70.0
+      ]
+    },
+    "steel": {
+      "energy_keV": [
+        80.0,
+        300.0,
+        661.657,
+        1500.0
+      ],
+      "mu_m_inv": [
+        180.0,
+        82.0,
+        58.0,
+        36.0
+      ]
+    }
+  },
+  "isotopes": {
+    "Cs-137": {
+      "lines": [
+        {
+          "energy_keV": 661.657,
+          "yield_per_decay": 0.851
+        }
+      ]
+    }
+  },
+  "detectors": {
+    "gamma-counter": {
+      "efficiency_energy_keV": [
+        80.0,
+        300.0,
+        661.657,
+        1500.0
+      ],
+      "intrinsic_efficiency": [
+        0.18,
+        0.11,
+        0.075,
+        0.035
+      ],
+      "background_cps": 2.0,
+      "dead_time_s": 1e-06
+    }
+  },
+  "measurement": {
+    "duration_s": 2.0,
+    "minimum_distance_m": 0.05,
+    "seed": 7
+  }
+}

@@ -11,6 +11,7 @@ from radcounter.core.radiation.embree_native import (
     EmbreeNativeScene,
     TriangleMesh,
 )
+from radcounter.core.scene import MaterialMode, UsdRadiationAttributes
 
 
 class UsdMeshConversionUnavailable(RuntimeError):
@@ -55,7 +56,9 @@ def extract_triangle_meshes(
     for prim in stage.Traverse():
         if not prim.IsA(usd_geom.Mesh):
             continue
-        material_attribute = prim.GetAttribute("radcounter:materialId")
+        material_attribute = prim.GetAttribute(UsdRadiationAttributes.MATERIAL_ID)
+        if not material_attribute.IsValid() or not material_attribute.HasAuthoredValue():
+            material_attribute = prim.GetAttribute("radcounter:materialId")
         if not material_attribute.IsValid() or not material_attribute.HasAuthoredValue():
             continue
         material_id = str(material_attribute.Get())
@@ -69,15 +72,32 @@ def extract_triangle_meshes(
         if len(points) == 0 or len(triangles) == 0:
             continue
         transform = xform_cache.GetLocalToWorldTransform(prim)
-        vertices_m = np.asarray(
-            [tuple(transform.Transform(point)) for point in points],
+        transform_rows = np.asarray(
+            [[float(transform[row][column]) for column in range(4)] for row in range(4)],
             dtype=np.float64,
+        )
+        world_transform = transform_rows.T
+        mode_value = prim.GetAttribute(UsdRadiationAttributes.MATERIAL_MODE)
+        geometry_mode = (
+            str(mode_value.Get())
+            if mode_value.IsValid() and mode_value.HasAuthoredValue()
+            else MaterialMode.SOLID.value
+        )
+        thickness_attribute = prim.GetAttribute(UsdRadiationAttributes.MATERIAL_THICKNESS_M)
+        thickness_m = (
+            float(thickness_attribute.Get())
+            if thickness_attribute.IsValid() and thickness_attribute.HasAuthoredValue()
+            else None
         )
         meshes.append(
             TriangleMesh(
-                vertices_m=vertices_m,
+                vertices_m=np.asarray(points, dtype=np.float64),
                 triangles=triangles,
                 material_index=material_index_by_id[material_id],
+                geometry_mode=geometry_mode,
+                explicit_thickness_m=thickness_m,
+                mesh_id=str(prim.GetPath()),
+                world_transform=world_transform,
             )
         )
     return tuple(meshes)
@@ -88,6 +108,7 @@ class UsdEmbreeSceneAdapter:
 
     def __init__(self) -> None:
         self._scene: EmbreeNativeScene | None = None
+        self._geometry_id_by_prim_path: dict[str, int] = {}
 
     @property
     def revision(self) -> int:
@@ -95,11 +116,48 @@ class UsdEmbreeSceneAdapter:
 
     def rebuild(self, stage: Any, material_index_by_id: Mapping[str, int]) -> int:
         scene = EmbreeNativeScene()
+        geometry_id_by_prim_path: dict[str, int] = {}
         for mesh in extract_triangle_meshes(stage, material_index_by_id):
-            scene.add_mesh(mesh)
+            if mesh.mesh_id is None:
+                raise RuntimeError("USD-derived radiation mesh has no prim path")
+            geometry_id_by_prim_path[mesh.mesh_id] = scene.add_mesh(mesh)
         scene.commit()
         self._scene = scene
+        self._geometry_id_by_prim_path = geometry_id_by_prim_path
         return scene.revision
+
+    def update_prim_transform(self, stage: Any, prim_path: str) -> None:
+        if self._scene is None:
+            raise RuntimeError("rebuild() must be called before updates")
+        try:
+            geometry_id = self._geometry_id_by_prim_path[prim_path]
+        except KeyError as error:
+            raise KeyError(f"USD prim is absent from the Embree scene: {prim_path}") from error
+        usd, usd_geom = _usd_types()
+        prim = stage.GetPrimAtPath(prim_path)
+        if not prim.IsValid():
+            raise KeyError(f"USD prim does not exist: {prim_path}")
+        matrix = usd_geom.XformCache(usd.TimeCode.Default()).GetLocalToWorldTransform(prim)
+        rows = np.asarray(
+            [[float(matrix[row][column]) for column in range(4)] for row in range(4)],
+            dtype=np.float64,
+        )
+        self._scene.update_instance_transform(geometry_id, rows.T)
+
+    def remove_prim(self, prim_path: str) -> None:
+        if self._scene is None:
+            raise RuntimeError("rebuild() must be called before updates")
+        try:
+            geometry_id = self._geometry_id_by_prim_path.pop(prim_path)
+        except KeyError as error:
+            raise KeyError(f"USD prim is absent from the Embree scene: {prim_path}") from error
+        self._scene.remove_geometry(geometry_id)
+
+    def commit_updates(self) -> int:
+        if self._scene is None:
+            raise RuntimeError("rebuild() must be called before updates")
+        self._scene.commit()
+        return self._scene.revision
 
     def trace_transmission(
         self,

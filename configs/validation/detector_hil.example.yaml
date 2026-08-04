@@ -1,0 +1,17 @@
+schema_version: 1
+protocol: radcounter-jsonl-crc32-v1
+transport:
+  kind: serial
+  device: /dev/ttyACM0
+  baud_rate: 115200
+detector:
+  detector_id: field_detector_1
+  model_id: laboratory_custom_czt
+  hardware_serial: REPLACE_WITH_SERIAL
+  calibration_id: REPLACE_WITH_CALIBRATION
+acceptance:
+  duration_s: 600
+  minimum_frames: 500
+  maximum_crc_errors: 0
+  maximum_sequence_gaps: 0
+  maximum_latency_p95_ms: 250

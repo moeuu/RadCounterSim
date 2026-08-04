@@ -1,0 +1,119 @@
+name: external-and-hardware-validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_gpu_matrix:
+        description: Run registered physical GPU runners
+        type: boolean
+        default: false
+      run_physical_hil:
+        description: Run the registered detector HIL runner
+        type: boolean
+        default: false
+
+jobs:
+  portable-protocol-gates:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.15"
+      - run: uv sync --all-groups --frozen
+      - run: uv run pytest tests/unit/test_aerial_validation.py tests/unit/test_detector_hil_validation.py tests/unit/test_physics_validation.py tests/unit/test_hardware_validation.py
+      - run: uv run python scripts/validate_detector_hil.py --mode loopback --duration-s 3
+      - run: uv run python scripts/validate_physics_model.py configs/validation/examples/synthetic_cs137_lead.csv configs/validation/examples/synthetic_cs137_lead.metadata.yaml
+
+  ros2-jazzy-bandwidth:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/validate_ros2_bandwidth.py --duration-s 30
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ros2-jazzy-bandwidth
+          path: .cache/ros2-bandwidth
+
+  gpu-endurance:
+    if: ${{ inputs.run_gpu_matrix }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-nvidia-4gb-r550
+            runner: '["self-hosted","linux","x64","nvidia","vram-4gb","driver-r550"]'
+            os_name: linux
+            vram_class: 4gb
+            gpu_count: 1
+            driver_pattern: '550\..+'
+            profile: weak_gpu
+          - id: linux-nvidia-8gb-r550
+            runner: '["self-hosted","linux","x64","nvidia","vram-8gb","driver-r550"]'
+            os_name: linux
+            vram_class: 8gb
+            gpu_count: 1
+            driver_pattern: '550\..+'
+            profile: weak_gpu
+          - id: linux-nvidia-8gb-r580
+            runner: '["self-hosted","linux","x64","nvidia","vram-8gb","driver-r580"]'
+            os_name: linux
+            vram_class: 8gb
+            gpu_count: 1
+            driver_pattern: '580\..+'
+            profile: weak_gpu
+          - id: linux-dual-nvidia-8gb-r580
+            runner: '["self-hosted","linux","x64","nvidia","dual-gpu","vram-8gb","driver-r580"]'
+            os_name: linux
+            vram_class: 8gb
+            gpu_count: 2
+            driver_pattern: '580\..+'
+            profile: balanced_gpu
+          - id: linux-nvidia-24gb-r580
+            runner: '["self-hosted","linux","x64","nvidia","vram-24gb","driver-r580"]'
+            os_name: linux
+            vram_class: 24gb
+            gpu_count: 1
+            driver_pattern: '580\..+'
+            profile: balanced_gpu
+          - id: windows-nvidia-8gb-r580
+            runner: '["self-hosted","windows","x64","nvidia","vram-8gb","driver-r580"]'
+            os_name: windows
+            vram_class: 8gb
+            gpu_count: 1
+            driver_pattern: '580\..+'
+            profile: weak_gpu
+    runs-on: ${{ fromJSON(matrix.runner) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.15"
+      - run: uv sync --all-groups --frozen
+      - name: Run registered Isaac Sim endurance command
+        shell: bash
+        env:
+          RADCOUNTER_PROFILE: ${{ matrix.profile }}
+        run: |
+          test -n "$RADCOUNTER_ISAAC_ENDURANCE_COMMAND"
+          eval "$RADCOUNTER_ISAAC_ENDURANCE_COMMAND"
+      - run: uv run python scripts/validate_hardware_gate.py --vram-class ${{ matrix.vram_class }} --minimum-gpu-count ${{ matrix.gpu_count }} --expected-os ${{ matrix.os_name }} --driver-pattern '${{ matrix.driver_pattern }}' --metrics .cache/large-fleet-endurance/metrics.json --output .cache/hardware-gate.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.id }}
+          path: |
+            .cache/large-fleet-endurance
+            .cache/hardware-gate.json
+
+  physical-detector-hil:
+    if: ${{ inputs.run_physical_hil }}
+    runs-on: [self-hosted, linux, x64, detector-hil]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --all-groups --frozen
+      - run: uv run python scripts/validate_detector_hil.py --mode serial --device "$RADCOUNTER_DETECTOR_DEVICE" --hardware-serial "$RADCOUNTER_DETECTOR_SERIAL" --calibration-id "$RADCOUNTER_CALIBRATION_ID" --duration-s 600 --require-physical
+      - uses: actions/upload-artifact@v4
+        with:
+          name: physical-detector-hil
+          path: .cache/detector-hil.json

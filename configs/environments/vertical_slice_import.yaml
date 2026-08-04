@@ -1,0 +1,31 @@
+schema_version: "1.0"
+environment:
+  environment_id: vertical-slice-external
+  uri: ../../assets/environments/radcounter_vertical_slice.usda
+  format: usd
+  coordinate_system:
+    units: auto
+    up_axis: auto
+    forward_axis: auto
+    handedness: auto
+  scale: 1.0
+  translation_world_m: [0.0, 0.0, 0.0]
+  rotation_world_rpy_deg: [0.0, 0.0, 0.0]
+  default_material_id: concrete
+  material_rules:
+    - pattern: "*Lead*"
+      material_id: lead
+    - pattern: "*Steel*"
+      material_id: steel
+  collision:
+    enabled: true
+    geometry_source: auto
+    approximation: triangle_mesh
+    show_collision_geometry: false
+  point_cloud_voxel_size_m: 0.10
+  max_point_cloud_voxels: 500000
+  max_triangles: 5000000
+  cad_mesh_size_m: 0.05
+  model_search_paths: []
+  package_search_paths: []
+  cache_directory: ~/.cache/radcountersim/environments

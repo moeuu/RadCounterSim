@@ -1,0 +1,15 @@
+schema_version: "1.0"
+environment:
+  environment_id: jsi-triga-mark-ii-2026
+  uri: ../../.cache/datasets/jsi-triga-2026/lidar_maps_combined_cleaned.pcd
+  format: pcd
+  coordinate_system:
+    units: m
+    up_axis: +Z
+  default_material_id: concrete
+  point_cloud_voxel_size_m: 0.10
+  max_point_cloud_voxels: 200000
+  max_triangles: 3000000
+  cache_directory: ../../.cache/environments
+  streaming:
+    enabled: false

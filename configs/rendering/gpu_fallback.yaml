@@ -1,0 +1,10 @@
+tier: fallback
+interactive_renderer: Storm
+capture_renderer: Storm
+capture_spp: 1
+max_bounces: 1
+resolution_scale: 0.5
+texture_budget_mb: 512
+max_visual_tiles: 16
+volumetrics: false
+effect_particle_scale: 0.05

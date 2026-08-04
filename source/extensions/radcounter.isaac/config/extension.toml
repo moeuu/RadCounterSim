@@ -7,13 +7,22 @@ keywords = ["isaac", "radiation", "robotics", "countermeasure"]
 
 [dependencies]
 "omni.kit.uiapp" = {}
+"omni.appwindow" = {}
 "omni.usd" = {}
 "omni.timeline" = {}
 "omni.physx" = { optional = true }
 "isaacsim.ros2.bridge" = { optional = true }
+"isaacsim.robot_motion.motion_generation" = { optional = true }
+"isaacsim.robot.wheeled_robots" = { optional = true }
+"isaacsim.asset.importer.urdf" = { optional = true }
+"isaacsim.asset.importer.mjcf" = { optional = true }
+"isaacsim.core.experimental.prims" = { optional = true }
 
 [[python.module]]
 name = "radcounter.isaac"
+
+[[python.module]]
+name = "radcounter.isaac.dashboard_extension"
 
 [settings]
 exts."radcounter.isaac".windowOpenByDefault = true

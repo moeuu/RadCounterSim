@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "RadCounterSim physical validation metadata",
+  "type": "object",
+  "required": ["evidence_kind", "source", "detector", "geometry", "environment"],
+  "properties": {
+    "evidence_kind": {"const": "measured"},
+    "source": {
+      "type": "object",
+      "required": [
+        "isotope",
+        "certificate_id",
+        "activity_bq",
+        "reference_date",
+        "photon_yield_per_decay"
+      ]
+    },
+    "detector": {
+      "type": "object",
+      "required": [
+        "model",
+        "serial_number",
+        "calibration_id",
+        "calibration_date",
+        "active_area_m2",
+        "intrinsic_efficiency"
+      ]
+    },
+    "geometry": {
+      "type": "object",
+      "required": ["procedure_id"]
+    },
+    "environment": {
+      "type": "object",
+      "required": ["temperature_c"]
+    }
+  }
+}

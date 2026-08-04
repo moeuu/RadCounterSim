@@ -1,0 +1,21 @@
+schema_version: "1.0"
+environment:
+  environment_id: large_facility
+  uri: assets/environments/large_facility.usd
+  format: usd
+  max_triangles: 5000000
+  streaming:
+    enabled: true
+    tile_size_m: 25.0
+    physics_radius_m: 40.0
+    visual_radius_m: 250.0
+    lod_distances_m: [40.0, 100.0, 200.0]
+    lod_vertex_cluster_m: [0.0, 0.05, 0.25, 1.0]
+    unload_hysteresis_m: 20.0
+    max_loaded_tiles: 160
+    max_loaded_triangles: 8000000
+    max_tile_triangles: 250000
+    max_changes_per_update: 4
+    update_interval_frames: 10
+    initial_focus_world_m: [0.0, 0.0, 0.0]
+    radiation_segment_padding_m: 0.25

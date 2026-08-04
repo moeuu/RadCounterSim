@@ -1,0 +1,23 @@
+string task_id
+string action_type
+string object_path
+string surface_path
+string disposal_zone_path
+geometry_msgs/PoseStamped pickup_base_pose
+geometry_msgs/PoseStamped pickup_tool_pose
+geometry_msgs/PoseStamped placement_base_pose
+geometry_msgs/PoseStamped placement_tool_pose
+float64 treatment_duration_s
+float64 settle_time_s
+bool use_joint_trajectory
+string[] joint_names
+float64[] pickup_joint_positions
+float64[] placement_joint_positions
+float64 trajectory_duration_s
+---
+bool success
+uint16 error_code
+string message
+---
+string phase
+float32 progress

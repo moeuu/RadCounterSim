@@ -1,0 +1,840 @@
+"""Generate planner candidates from public belief and the live Isaac scene."""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from typing import Any
+
+import numpy as np
+
+from radcounter.core.models.actions import ActionType, CountermeasureAction
+from radcounter.core.models.state import BeliefState
+from radcounter.core.planning.models import ActionCandidate, ActionMetrics, FeasibilityFacts
+
+
+@dataclass(frozen=True, slots=True)
+class SceneCandidateConfig:
+    countermeasure_robot_path: str = "/World/CountermeasureRobot"
+    measurement_robot_path: str = "/World/MeasurementRobot"
+    task_detector_path: str = "/World/DetectorStations/Protected"
+    disposal_zone_path: str = "/World/DisposalZone"
+    end_effector_offset_m: tuple[float, float, float] = (1.2, 0.0, 0.0)
+    mobile_clearance_m: float = 0.28
+    manipulator_workspace_m: float = 1.55
+    shield_line_fractions: tuple[float, ...] = (0.35, 0.5, 0.65)
+    measurement_duration_s: float = 2.0
+    shield_duration_s: float = 45.0
+    decon_duration_s: float = 20.0
+    object_duration_s: float = 35.0
+    object_parking_offsets_m: tuple[tuple[float, float], ...] = (
+        (1.6, 0.0),
+        (1.6, -1.8),
+        (3.4, 0.0),
+        (3.4, -1.8),
+    )
+    dose_proxy_to_sv_h: float = 1.0e-12
+
+
+class IsaacSceneFeasibilityProbe:
+    """Evaluate path, IK, collision, grasp, support, and disposal constraints."""
+
+    def __init__(
+        self,
+        stage: Any,
+        config: SceneCandidateConfig,
+        controller: Any | None = None,
+    ) -> None:
+        self.stage = stage
+        self.config = config
+        self.controller = controller
+
+    @staticmethod
+    def _attribute(prim: Any, name: str, default: object = None) -> object:
+        attribute = prim.GetAttribute(name)
+        if not attribute or not attribute.HasAuthoredValueOpinion():
+            return default
+        value = attribute.Get()
+        return default if value is None else value
+
+    def world_position(self, prim_or_path: Any) -> np.ndarray:
+        from pxr import Gf, UsdGeom
+
+        prim = (
+            self.stage.GetPrimAtPath(prim_or_path)
+            if isinstance(prim_or_path, str)
+            else prim_or_path
+        )
+        if not prim or not prim.IsValid():
+            raise ValueError(f"USD prim does not exist: {prim_or_path}")
+        matrix = UsdGeom.XformCache().GetLocalToWorldTransform(prim)
+        return np.asarray(matrix.Transform(Gf.Vec3d()), dtype=np.float64)
+
+    def bounds(self, prim_or_path: Any) -> tuple[np.ndarray, np.ndarray] | None:
+        from pxr import Usd, UsdGeom
+
+        prim = (
+            self.stage.GetPrimAtPath(prim_or_path)
+            if isinstance(prim_or_path, str)
+            else prim_or_path
+        )
+        if not prim or not prim.IsValid() or not UsdGeom.Imageable(prim):
+            return None
+        cache = UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+        aligned = cache.ComputeWorldBound(prim).ComputeAlignedRange()
+        minimum = np.asarray(aligned.GetMin(), dtype=np.float64)
+        maximum = np.asarray(aligned.GetMax(), dtype=np.float64)
+        if not np.all(np.isfinite(minimum)) or not np.all(np.isfinite(maximum)):
+            return None
+        return minimum, maximum
+
+    def _collision_bounds(self) -> tuple[tuple[str, np.ndarray, np.ndarray], ...]:
+        from pxr import UsdPhysics
+
+        result: list[tuple[str, np.ndarray, np.ndarray]] = []
+        for prim in self.stage.Traverse():
+            if not prim.HasAPI(UsdPhysics.CollisionAPI):
+                continue
+            bounds = self.bounds(prim)
+            if bounds is not None:
+                result.append((str(prim.GetPath()), bounds[0], bounds[1]))
+        return tuple(result)
+
+    @staticmethod
+    def _is_descendant(path: str, parent: str) -> bool:
+        return path == parent or path.startswith(parent.rstrip("/") + "/")
+
+    def _navigation_obstacles(
+        self,
+        *,
+        excluded_paths: tuple[str, ...] = (),
+    ) -> tuple[tuple[str, np.ndarray, np.ndarray], ...]:
+        ignored = (
+            self.config.countermeasure_robot_path,
+            self.config.measurement_robot_path,
+            *excluded_paths,
+        )
+        clearance = self.config.mobile_clearance_m
+        obstacles: list[tuple[str, np.ndarray, np.ndarray]] = []
+        for path, lower, upper in self._collision_bounds():
+            if any(self._is_descendant(path, item) for item in ignored):
+                continue
+            if upper[2] <= 0.08:
+                continue
+            expanded_lower = lower - np.asarray((clearance, clearance, 0.05))
+            expanded_upper = upper + np.asarray((clearance, clearance, 0.05))
+            obstacles.append((path, expanded_lower, expanded_upper))
+        return tuple(obstacles)
+
+    @staticmethod
+    def _segment_available(
+        start: np.ndarray,
+        target: np.ndarray,
+        obstacles: tuple[tuple[str, np.ndarray, np.ndarray], ...],
+    ) -> bool:
+        distance = float(np.linalg.norm(target[:2] - start[:2]))
+        sample_count = max(2, int(math.ceil(distance / 0.12)) + 1)
+        samples = np.linspace(start, target, sample_count)
+        samples[:, 2] = np.maximum(samples[:, 2], 0.32)
+        for _, expanded_lower, expanded_upper in obstacles:
+            inside = np.all((samples >= expanded_lower) & (samples <= expanded_upper), axis=1)
+            if bool(np.any(inside)):
+                return False
+        return True
+
+    def plan_mobile_route(
+        self,
+        start_m: np.ndarray,
+        target_m: np.ndarray,
+        *,
+        excluded_paths: tuple[str, ...] = (),
+    ) -> tuple[np.ndarray, ...] | None:
+        start = np.asarray(start_m, dtype=np.float64)
+        target = np.asarray(target_m, dtype=np.float64)
+        obstacles = self._navigation_obstacles(excluded_paths=excluded_paths)
+        if self._segment_available(start, target, obstacles):
+            return (target.copy(),)
+
+        navigation_z = max(float(start[2]), float(target[2]), 0.32)
+        corner_padding = 0.04
+        points = [start.copy(), target.copy()]
+        for _, lower, upper in obstacles:
+            for x in (lower[0] - corner_padding, upper[0] + corner_padding):
+                for y in (lower[1] - corner_padding, upper[1] + corner_padding):
+                    candidate = np.asarray((x, y, navigation_z), dtype=np.float64)
+                    if any(
+                        np.all(candidate >= other_lower) and np.all(candidate <= other_upper)
+                        for _, other_lower, other_upper in obstacles
+                    ):
+                        continue
+                    if not any(
+                        np.linalg.norm(candidate[:2] - point[:2]) < 1.0e-6 for point in points
+                    ):
+                        points.append(candidate)
+
+        count = len(points)
+        distances = np.full(count, np.inf, dtype=np.float64)
+        previous = np.full(count, -1, dtype=np.int64)
+        visited = np.zeros(count, dtype=bool)
+        distances[0] = 0.0
+        for _ in range(count):
+            candidates = np.flatnonzero(~visited)
+            if candidates.size == 0:
+                break
+            current = int(candidates[np.argmin(distances[candidates])])
+            if not np.isfinite(distances[current]) or current == 1:
+                break
+            visited[current] = True
+            for neighbor in candidates:
+                neighbor_index = int(neighbor)
+                if neighbor_index == current or not self._segment_available(
+                    points[current], points[neighbor_index], obstacles
+                ):
+                    continue
+                tentative = distances[current] + float(
+                    np.linalg.norm(points[neighbor_index][:2] - points[current][:2])
+                )
+                if tentative < distances[neighbor_index]:
+                    distances[neighbor_index] = tentative
+                    previous[neighbor_index] = current
+
+        if not np.isfinite(distances[1]):
+            return None
+        route_indices = [1]
+        while route_indices[-1] != 0:
+            parent = int(previous[route_indices[-1]])
+            if parent < 0:
+                return None
+            route_indices.append(parent)
+        route_indices.reverse()
+        return tuple(points[index].copy() for index in route_indices[1:])
+
+    def mobile_path_available(
+        self,
+        start_m: np.ndarray,
+        target_m: np.ndarray,
+        *,
+        excluded_paths: tuple[str, ...] = (),
+    ) -> bool:
+        return self.plan_mobile_route(start_m, target_m, excluded_paths=excluded_paths) is not None
+
+    def manipulator_reachable(
+        self, target_m: np.ndarray, planned_base_m: np.ndarray | None = None
+    ) -> bool:
+        target = np.asarray(target_m, dtype=np.float64)
+        robot = self.world_position(self.config.countermeasure_robot_path)
+        planned_base = robot if planned_base_m is None else np.asarray(planned_base_m)
+        if (
+            self.controller is not None
+            and hasattr(self.controller, "check_reachability")
+            and np.linalg.norm(planned_base - robot) <= 0.05
+        ):
+            try:
+                return bool(self.controller.check_reachability(target))
+            except NotImplementedError:
+                pass
+        return float(np.linalg.norm(target - planned_base)) <= self.config.manipulator_workspace_m
+
+    def grasp_frame_available(self, object_path: str | None) -> bool:
+        if not object_path:
+            return True
+        prim = self.stage.GetPrimAtPath(object_path)
+        if not prim or not prim.IsValid():
+            return False
+        frame_name = str(self._attribute(prim, "rad:manipulation:graspFrame", ""))
+        if not frame_name:
+            return False
+        frame = self.stage.GetPrimAtPath(f"{object_path.rstrip('/')}/{frame_name}")
+        return bool(frame and frame.IsValid())
+
+    def collision_free_placement(self, object_path: str | None, target_m: np.ndarray) -> bool:
+        if not object_path:
+            return True
+        current_bounds = self.bounds(object_path)
+        if current_bounds is None:
+            return False
+        current_center = (current_bounds[0] + current_bounds[1]) * 0.5
+        half_extent = (current_bounds[1] - current_bounds[0]) * 0.5
+        candidate_center = np.asarray(target_m, dtype=np.float64)
+        candidate_lower = candidate_center - half_extent
+        candidate_upper = candidate_center + half_extent
+        ignored = (
+            object_path,
+            self.config.countermeasure_robot_path,
+            self.config.measurement_robot_path,
+        )
+        for path, lower, upper in self._collision_bounds():
+            if any(self._is_descendant(path, item) for item in ignored):
+                continue
+            if upper[2] <= candidate_lower[2] + 0.035:
+                continue
+            overlap = np.all(candidate_lower < upper - 0.01) and np.all(
+                candidate_upper > lower + 0.01
+            )
+            if bool(overlap):
+                return False
+        return bool(np.all(np.isfinite(current_center)))
+
+    def placement_stable(self, object_path: str | None, target_m: np.ndarray) -> bool:
+        if not object_path:
+            return True
+        object_bounds = self.bounds(object_path)
+        if object_bounds is None:
+            return False
+        half_height = float((object_bounds[1][2] - object_bounds[0][2]) * 0.5)
+        bottom = float(target_m[2] - half_height)
+        for path, lower, upper in self._collision_bounds():
+            if self._is_descendant(path, object_path):
+                continue
+            supports_xy = bool(
+                lower[0] <= target_m[0] <= upper[0] and lower[1] <= target_m[1] <= upper[1]
+            )
+            if supports_xy and -0.08 <= bottom - upper[2] <= 0.15:
+                return True
+        return False
+
+    def disposal_capacity_available(self, object_path: str | None) -> bool:
+        zone = self.stage.GetPrimAtPath(self.config.disposal_zone_path)
+        if not zone or not zone.IsValid() or not object_path:
+            return False
+        target = self.stage.GetPrimAtPath(object_path)
+        target_class = str(self._attribute(target, "rad:manipulation:disposalClass", ""))
+        accepted = str(self._attribute(zone, "rad:disposal:acceptsClass", ""))
+        return bool(target_class and target_class == accepted)
+
+    def facts(
+        self,
+        *,
+        object_path: str | None,
+        target_m: np.ndarray,
+        pickup_base_m: np.ndarray,
+        placement_base_m: np.ndarray,
+        requires_grasp: bool,
+        requires_disposal: bool = False,
+    ) -> FeasibilityFacts:
+        robot_position = self.world_position(self.config.countermeasure_robot_path)
+        path_to_pickup = self.mobile_path_available(
+            robot_position,
+            pickup_base_m,
+            excluded_paths=(() if object_path is None else (object_path,)),
+        )
+        path_to_placement = self.mobile_path_available(
+            pickup_base_m,
+            placement_base_m,
+            excluded_paths=(() if object_path is None else (object_path,)),
+        )
+        return FeasibilityFacts(
+            mobile_path_available=path_to_pickup and path_to_placement,
+            manipulator_reachable=(
+                True
+                if not requires_grasp
+                else self.manipulator_reachable(target_m, placement_base_m)
+            ),
+            collision_free=self.collision_free_placement(object_path, target_m),
+            grasp_frame_available=(
+                True if not requires_grasp else self.grasp_frame_available(object_path)
+            ),
+            placement_stable=self.placement_stable(object_path, target_m),
+            disposal_capacity_available=(
+                True if not requires_disposal else self.disposal_capacity_available(object_path)
+            ),
+            robot_available=bool(
+                self.stage.GetPrimAtPath(self.config.countermeasure_robot_path).IsValid()
+            ),
+        )
+
+
+class IsaacActionCandidateGenerator:
+    """Create truth-free planner inputs from USD geometry and a BeliefState."""
+
+    def __init__(
+        self,
+        stage: Any,
+        radiation_simulation: Any,
+        *,
+        controller: Any | None = None,
+        config: SceneCandidateConfig | None = None,
+    ) -> None:
+        self.stage = stage
+        self.simulation = radiation_simulation
+        self.config = config or SceneCandidateConfig()
+        self.probe = IsaacSceneFeasibilityProbe(stage, self.config, controller)
+        self._latest: dict[str, ActionCandidate] = {}
+
+    @staticmethod
+    def _attribute(prim: Any, name: str, default: object = None) -> object:
+        attribute = prim.GetAttribute(name)
+        if not attribute or not attribute.HasAuthoredValueOpinion():
+            return default
+        value = attribute.Get()
+        return default if value is None else value
+
+    @staticmethod
+    def _pose(position_m: np.ndarray) -> np.ndarray:
+        pose = np.eye(4, dtype=np.float64)
+        pose[:3, 3] = np.asarray(position_m, dtype=np.float64)
+        return pose
+
+    @staticmethod
+    def _safe_name(path: str) -> str:
+        return path.strip("/").replace("/", "-").lower()
+
+    def _center(self, prim_or_path: Any) -> np.ndarray:
+        bounds = self.probe.bounds(prim_or_path)
+        if bounds is not None:
+            return (bounds[0] + bounds[1]) * 0.5
+        return self.probe.world_position(prim_or_path)
+
+    def _robot_position(self, robot_path: str) -> np.ndarray:
+        return self.probe.world_position(robot_path)
+
+    def _public_source_samples(self, belief: BeliefState) -> tuple[np.ndarray, np.ndarray]:
+        strengths_by_path: dict[str, float] = {}
+        for basis_id, strength in zip(belief.basis_ids, belief.source_strength_bq, strict=True):
+            basis_path = basis_id.split("#", 1)[0]
+            strengths_by_path[basis_path] = strengths_by_path.get(basis_path, 0.0) + float(strength)
+        positions: list[np.ndarray] = []
+        strengths: list[np.ndarray] = []
+        visible_sources = [
+            source for source in self.simulation.sources if not source.hidden_from_estimator
+        ]
+        for source in visible_sources:
+            value = strengths_by_path.get(source.prim_path)
+            if value is None:
+                continue
+            positions.append(np.asarray(source.positions_m, dtype=np.float64))
+            strengths.append(np.full(len(source.positions_m), value / len(source.positions_m)))
+        if not positions and visible_sources and float(np.sum(belief.source_strength_bq)) > 0:
+            all_positions = np.concatenate(
+                [np.asarray(source.positions_m, dtype=np.float64) for source in visible_sources]
+            )
+            positions.append(all_positions)
+            strengths.append(
+                np.full(
+                    len(all_positions),
+                    float(np.sum(belief.source_strength_bq)) / len(all_positions),
+                )
+            )
+        if not positions:
+            return np.empty((0, 3), dtype=np.float64), np.empty(0, dtype=np.float64)
+        return np.concatenate(positions), np.concatenate(strengths)
+
+    def belief_rate_proxy(self, position_m: np.ndarray, belief: BeliefState) -> float:
+        origins, strengths = self._public_source_samples(belief)
+        if not len(origins):
+            return 0.0
+        targets = np.repeat(
+            np.asarray(position_m, dtype=np.float64).reshape(1, 3), len(origins), axis=0
+        )
+        distances = np.maximum(
+            np.linalg.norm(targets - origins, axis=1),
+            self.simulation.configuration.minimum_distance_m,
+        )
+        transmission = self.simulation.transport.transmission(
+            origins, targets, np.asarray([661.657], dtype=np.float64)
+        )[:, 0]
+        return float(np.sum(strengths * transmission / (4.0 * math.pi * distances**2)))
+
+    def _task_position(self) -> np.ndarray:
+        prim = self.stage.GetPrimAtPath(self.config.task_detector_path)
+        if prim and prim.IsValid():
+            return self.probe.world_position(prim)
+        if self.simulation.detectors:
+            return np.asarray(self.simulation.detectors[0].position_m, dtype=np.float64)
+        raise RuntimeError("the scene has no task detector")
+
+    def _facts(
+        self,
+        *,
+        object_path: str | None,
+        target_m: np.ndarray,
+        pickup_base_m: np.ndarray,
+        placement_base_m: np.ndarray,
+        requires_grasp: bool,
+        requires_disposal: bool = False,
+    ) -> FeasibilityFacts:
+        return self.probe.facts(
+            object_path=object_path,
+            target_m=target_m,
+            pickup_base_m=pickup_base_m,
+            placement_base_m=placement_base_m,
+            requires_grasp=requires_grasp,
+            requires_disposal=requires_disposal,
+        )
+
+    def _candidate(
+        self,
+        action: CountermeasureAction,
+        belief: BeliefState,
+        facts: FeasibilityFacts,
+        *,
+        target_m: np.ndarray,
+        remaining_fraction: float,
+        information_fraction: float = 0.0,
+        tags: frozenset[str] = frozenset(),
+    ) -> ActionCandidate:
+        baseline = self.belief_rate_proxy(self._task_position(), belief)
+        expected = baseline * float(np.clip(remaining_fraction, 0.0, 1.0))
+        uncertainty = float(np.sqrt(max(np.trace(belief.covariance), 0.0)))
+        failed_facts = sum(
+            not value
+            for value in (
+                facts.mobile_path_available,
+                facts.manipulator_reachable,
+                facts.collision_free,
+                facts.grasp_frame_available,
+                facts.placement_stable,
+                facts.disposal_capacity_available,
+                facts.robot_available,
+            )
+        )
+        robot_position = self._robot_position(action.robot_id)
+        distance = float(np.linalg.norm(np.asarray(target_m) - robot_position))
+        dose_rate = expected * self.config.dose_proxy_to_sv_h
+        metrics = ActionMetrics(
+            expected_task_path_dose_sv=dose_rate * action.predicted_duration_s / 3600.0,
+            expected_peak_dose_rate_sv_h=dose_rate,
+            residual_source_uncertainty=uncertainty * max(remaining_fraction, 0.05),
+            action_time_s=action.predicted_duration_s,
+            resource_cost=float(sum(action.resource_cost.values())),
+            robot_execution_risk=failed_facts / 7.0,
+            expected_information_gain=uncertainty * information_fraction,
+            distance_to_target_m=distance,
+        )
+        candidate = ActionCandidate(action, metrics, facts, tags)
+        self._latest[action.action_id] = candidate
+        return candidate
+
+    def _base_for_end_effector(
+        self,
+        target_m: np.ndarray,
+        *,
+        robot_z: float,
+        yaw_rad: float = 0.0,
+    ) -> np.ndarray:
+        offset = np.asarray(self.config.end_effector_offset_m, dtype=np.float64)
+        cosine = math.cos(yaw_rad)
+        sine = math.sin(yaw_rad)
+        rotated_offset = np.asarray(
+            (
+                cosine * offset[0] - sine * offset[1],
+                sine * offset[0] + cosine * offset[1],
+                offset[2],
+            ),
+            dtype=np.float64,
+        )
+        result = np.asarray(target_m, dtype=np.float64) - rotated_offset
+        result[2] = robot_z
+        return result
+
+    def _route(
+        self, start_m: np.ndarray, target_m: np.ndarray, object_path: str
+    ) -> list[list[float]]:
+        route = self.probe.plan_mobile_route(
+            start_m,
+            target_m,
+            excluded_paths=(object_path,),
+        )
+        return [] if route is None else [waypoint.tolist() for waypoint in route]
+
+    def _measurement_candidates(self, belief: BeliefState) -> list[ActionCandidate]:
+        robot = self._robot_position(self.config.measurement_robot_path)
+        candidates: list[ActionCandidate] = []
+        for prim in self.stage.Traverse():
+            if self._attribute(prim, "rad:role", "") != "detector_station":
+                continue
+            target = self.probe.world_position(prim)
+            path_available = self.probe.mobile_path_available(robot, target)
+            facts = FeasibilityFacts(mobile_path_available=path_available)
+            action = CountermeasureAction(
+                action_id=f"measure-{self._safe_name(str(prim.GetPath()))}",
+                action_type=ActionType.MEASURE,
+                robot_id=self.config.measurement_robot_path,
+                target_prim_path=str(prim.GetPath()),
+                target_pose_world=self._pose(target),
+                parameters={"detector_path": str(prim.GetPath())},
+                predicted_duration_s=self.config.measurement_duration_s,
+            )
+            candidates.append(
+                self._candidate(
+                    action,
+                    belief,
+                    facts,
+                    target_m=target,
+                    remaining_fraction=1.0,
+                    information_fraction=0.25,
+                    tags=frozenset({"measurement", "scene_derived"}),
+                )
+            )
+        return candidates
+
+    def _decon_candidates(self, belief: BeliefState) -> list[ActionCandidate]:
+        robot = self._robot_position(self.config.countermeasure_robot_path)
+        candidates: list[ActionCandidate] = []
+        for prim in self.stage.Traverse():
+            if not bool(self._attribute(prim, "rad:decon:enabled", False)):
+                continue
+            target = self._center(prim)
+            base = self._base_for_end_effector(target, robot_z=float(robot[2]))
+            efficiency = float(self._attribute(prim, "rad:decon:efficiencyMean", 0.8))
+            facts = self._facts(
+                object_path=None,
+                target_m=target,
+                pickup_base_m=base,
+                placement_base_m=base,
+                requires_grasp=False,
+            )
+            action = CountermeasureAction(
+                action_id=f"decon-{self._safe_name(str(prim.GetPath()))}",
+                action_type=ActionType.DECONTAMINATE,
+                robot_id=self.config.countermeasure_robot_path,
+                target_prim_path=str(prim.GetPath()),
+                target_region={"surface_path": str(prim.GetPath())},
+                target_pose_world=self._pose(target),
+                parameters={
+                    "surface_path": str(prim.GetPath()),
+                    "duration_s": self.config.decon_duration_s,
+                    "pickup_base_position_m": base.tolist(),
+                    "placement_base_position_m": base.tolist(),
+                    "decon_media": self.config.decon_duration_s,
+                },
+                predicted_duration_s=self.config.decon_duration_s,
+            )
+            candidates.append(
+                self._candidate(
+                    action,
+                    belief,
+                    facts,
+                    target_m=target,
+                    remaining_fraction=max(0.0, 1.0 - efficiency),
+                    tags=frozenset({"decontamination", "scene_derived"}),
+                )
+            )
+        return candidates
+
+    def _shield_reduction(self, shield: Any) -> float:
+        material_id = str(self._attribute(shield, "rad:material:id", "lead"))
+        energy, attenuation = self.simulation.configuration.materials[material_id]
+        coefficient = float(np.interp(661.657, energy, attenuation))
+        bounds = self.probe.bounds(shield)
+        thickness = 0.05 if bounds is None else float(np.min(bounds[1] - bounds[0]))
+        return float(math.exp(-coefficient * max(thickness, 1.0e-4)))
+
+    def _shield_candidates(self, belief: BeliefState) -> list[ActionCandidate]:
+        source_positions, source_strengths = self._public_source_samples(belief)
+        if not len(source_positions):
+            return []
+        source = source_positions[int(np.argmax(source_strengths))]
+        protected = self._task_position()
+        robot = self._robot_position(self.config.countermeasure_robot_path)
+        candidates: list[ActionCandidate] = []
+        for shield in self.stage.Traverse():
+            if self._attribute(shield, "rad:role", "") != "shield":
+                continue
+            if not bool(self._attribute(shield, "rad:shield:movable", False)):
+                continue
+            shield_path = str(shield.GetPath())
+            pickup = self._center(shield)
+            pickup_base = self._base_for_end_effector(pickup, robot_z=float(robot[2]))
+            for fraction in self.config.shield_line_fractions:
+                target = source + fraction * (protected - source)
+                target[2] = pickup[2]
+                placement_base = self._base_for_end_effector(target, robot_z=float(robot[2]))
+                facts = self._facts(
+                    object_path=shield_path,
+                    target_m=target,
+                    pickup_base_m=pickup_base,
+                    placement_base_m=placement_base,
+                    requires_grasp=True,
+                )
+                action = CountermeasureAction(
+                    action_id=(
+                        f"shield-{self._safe_name(shield_path)}-{int(round(fraction * 100)):02d}"
+                    ),
+                    action_type=ActionType.PLACE_SHIELD,
+                    robot_id=self.config.countermeasure_robot_path,
+                    target_prim_path=shield_path,
+                    target_pose_world=self._pose(target),
+                    parameters={
+                        "object_path": shield_path,
+                        "pickup_base_position_m": pickup_base.tolist(),
+                        "placement_base_position_m": placement_base.tolist(),
+                        "pickup_base_route_m": self._route(robot, pickup_base, shield_path),
+                        "placement_base_route_m": self._route(
+                            pickup_base, placement_base, shield_path
+                        ),
+                        "pickup_base_yaw_rad": 0.0,
+                        "placement_base_yaw_rad": 0.0,
+                        "shield_type": str(self._attribute(shield, "rad:material:id", "default")),
+                        "shield_units": int(self._attribute(shield, "rad:shield:resourceUnits", 1)),
+                    },
+                    predicted_duration_s=self.config.shield_duration_s,
+                )
+                candidates.append(
+                    self._candidate(
+                        action,
+                        belief,
+                        facts,
+                        target_m=target,
+                        remaining_fraction=self._shield_reduction(shield),
+                        tags=frozenset({"shield", "scene_derived"}),
+                    )
+                )
+        return candidates
+
+    def _object_candidates(self, belief: BeliefState) -> list[ActionCandidate]:
+        robot = self._robot_position(self.config.countermeasure_robot_path)
+        zone = self.stage.GetPrimAtPath(self.config.disposal_zone_path)
+        if not zone or not zone.IsValid():
+            return []
+        zone_position = self._center(zone)
+        parking_paths = [
+            str(prim.GetPath())
+            for prim in self.stage.Traverse()
+            if self._attribute(prim, "rad:manipulation:graspFrame", None) is not None
+            and self._attribute(prim, "rad:role", "") != "shield"
+        ]
+        candidates: list[ActionCandidate] = []
+        for prim in self.stage.Traverse():
+            if not bool(self._attribute(prim, "rad:manipulation:movable", False)):
+                continue
+            if self._attribute(prim, "rad:role", "") == "shield":
+                continue
+            object_path = str(prim.GetPath())
+            pickup = self._center(prim)
+            pickup_base = self._base_for_end_effector(pickup, robot_z=float(robot[2]))
+            parking_slot = parking_paths.index(object_path)
+            configured_offsets = self.config.object_parking_offsets_m
+            offset_index = parking_slot % len(configured_offsets)
+            offset_ring = parking_slot // len(configured_offsets)
+            offset_xy = np.asarray(configured_offsets[offset_index], dtype=np.float64)
+            offset_xy[0] += 1.8 * offset_ring
+            parking = zone_position + np.asarray((offset_xy[0], offset_xy[1], 0.0))
+            parking[2] = pickup[2]
+            placement_base = self._base_for_end_effector(parking, robot_z=float(robot[2]))
+            facts = self._facts(
+                object_path=object_path,
+                target_m=parking,
+                pickup_base_m=pickup_base,
+                placement_base_m=placement_base,
+                requires_grasp=True,
+            )
+            action = CountermeasureAction(
+                action_id=f"move-{self._safe_name(object_path)}",
+                action_type=ActionType.MOVE_OBJECT,
+                robot_id=self.config.countermeasure_robot_path,
+                target_prim_path=object_path,
+                target_pose_world=self._pose(parking),
+                parameters={
+                    "object_path": object_path,
+                    "pickup_base_position_m": pickup_base.tolist(),
+                    "placement_base_position_m": placement_base.tolist(),
+                    "pickup_base_route_m": self._route(robot, pickup_base, object_path),
+                    "placement_base_route_m": self._route(pickup_base, placement_base, object_path),
+                    "pickup_base_yaw_rad": 0.0,
+                    "placement_base_yaw_rad": 0.0,
+                },
+                predicted_duration_s=self.config.object_duration_s,
+            )
+            candidates.append(
+                self._candidate(
+                    action,
+                    belief,
+                    facts,
+                    target_m=parking,
+                    remaining_fraction=(0.5 if object_path in belief.basis_ids else 1.0),
+                    tags=frozenset({"object_move", "scene_derived"}),
+                )
+            )
+            if not bool(self._attribute(prim, "rad:manipulation:removable", False)):
+                continue
+            removal_target = zone_position.copy()
+            removal_target[2] = pickup[2]
+            removal_base = self._base_for_end_effector(
+                removal_target,
+                robot_z=float(robot[2]),
+                yaw_rad=math.pi,
+            )
+            removal_facts = self._facts(
+                object_path=object_path,
+                target_m=removal_target,
+                pickup_base_m=pickup_base,
+                placement_base_m=removal_base,
+                requires_grasp=True,
+                requires_disposal=True,
+            )
+            remove = CountermeasureAction(
+                action_id=f"remove-{self._safe_name(object_path)}",
+                action_type=ActionType.REMOVE_OBJECT,
+                robot_id=self.config.countermeasure_robot_path,
+                target_prim_path=object_path,
+                target_pose_world=self._pose(removal_target),
+                parameters={
+                    "object_path": object_path,
+                    "disposal_zone_path": self.config.disposal_zone_path,
+                    "pickup_base_position_m": pickup_base.tolist(),
+                    "placement_base_position_m": removal_base.tolist(),
+                    "pickup_base_route_m": self._route(robot, pickup_base, object_path),
+                    "placement_base_route_m": self._route(pickup_base, removal_base, object_path),
+                    "pickup_base_yaw_rad": 0.0,
+                    "placement_base_yaw_rad": math.pi,
+                },
+                predicted_duration_s=self.config.object_duration_s,
+            )
+            candidates.append(
+                self._candidate(
+                    remove,
+                    belief,
+                    removal_facts,
+                    target_m=removal_target,
+                    remaining_fraction=(0.0 if object_path in belief.basis_ids else 1.0),
+                    tags=frozenset({"object_remove", "scene_derived"}),
+                )
+            )
+        return candidates
+
+    def generate_all(
+        self, belief: BeliefState, diagnosis: object | None = None
+    ) -> tuple[ActionCandidate, ...]:
+        del diagnosis
+        self._latest.clear()
+        candidates = [
+            *self._measurement_candidates(belief),
+            *self._decon_candidates(belief),
+            *self._shield_candidates(belief),
+            *self._object_candidates(belief),
+        ]
+        return tuple(candidates)
+
+    def generate_measurement_actions(self, belief: BeliefState) -> tuple[ActionCandidate, ...]:
+        return tuple(self._measurement_candidates(belief))
+
+    def generate_decon_actions(self, belief: BeliefState) -> tuple[ActionCandidate, ...]:
+        return tuple(self._decon_candidates(belief))
+
+    def generate_shield_actions(self, belief: BeliefState) -> tuple[ActionCandidate, ...]:
+        return tuple(self._shield_candidates(belief))
+
+    def generate_move_remove_actions(self, belief: BeliefState) -> tuple[ActionCandidate, ...]:
+        return tuple(self._object_candidates(belief))
+
+    def preview(self, action: CountermeasureAction, belief: BeliefState) -> dict[str, object]:
+        candidate = self._latest.get(action.action_id)
+        if candidate is None:
+            raise KeyError(f"action was not generated from the current scene: {action.action_id}")
+        baseline = self.belief_rate_proxy(self._task_position(), belief)
+        peak = candidate.metrics.expected_peak_dose_rate_sv_h
+        predicted_rate = peak / self.config.dose_proxy_to_sv_h
+        return {
+            "action_id": action.action_id,
+            "detector_path": self.config.task_detector_path,
+            "baseline_rate_proxy_cps": baseline,
+            "predicted_rate_proxy_cps": predicted_rate,
+            "belief_revision": vars(belief.revision),
+            "truth_accessed": False,
+        }
+
+    def evaluate_task(self, belief: BeliefState) -> tuple[float, float]:
+        rate = self.belief_rate_proxy(self._task_position(), belief)
+        peak_sv_h = rate * self.config.dose_proxy_to_sv_h
+        return peak_sv_h / 3600.0, peak_sv_h

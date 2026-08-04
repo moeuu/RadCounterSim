@@ -1,0 +1,8 @@
+measurement_kind,energy_kev,observed_counts,live_time_s,background_counts,background_live_time_s,reference_counts,reference_live_time_s,reference_background_counts,distance_m,reference_distance_m,material,thickness_mm,mass_attenuation_cm2_g,density_g_cm3
+absolute_source,661.657,39789,10,0,10,0,1,0,1,0,,0,0,0
+inverse_square,661.657,100000,10,0,10,100000,10,0,1,1,,0,0,0
+inverse_square,661.657,25000,10,0,10,100000,10,0,2,1,,0,0,0
+inverse_square,661.657,11111,10,0,10,100000,10,0,3,1,,0,0,0
+attenuation,661.657,53580,10,0,10,100000,10,0,1,1,lead,5,0.11,11.34
+attenuation,661.657,28708,10,0,10,100000,10,0,1,1,lead,10,0.11,11.34
+attenuation,661.657,8242,10,0,10,100000,10,0,1,1,lead,20,0.11,11.34

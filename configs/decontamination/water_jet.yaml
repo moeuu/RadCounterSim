@@ -1,0 +1,19 @@
+method: water_jet
+flow_rate_l_min: 6.0
+pressure_mpa: 5.0
+reference_pressure_mpa: 5.0
+spray_cone_angle_deg: 32.0
+minimum_footprint_radius_m: 0.16
+min_standoff_m: 0.30
+max_standoff_m: 0.90
+max_incidence_angle_deg: 55.0
+removal_coefficient_m2_per_l: 0.80
+max_surface_speed_m_s: 1.50
+activity_capture_fraction: 0.70
+water_recovery_fraction: 0.75
+runoff_redeposition_fraction: 0.35
+surface_water_retention_fraction: 0.08
+require_wastewater_collection: true
+resources:
+  clean_water_l: 20.0
+  wastewater_tank_l: 18.0

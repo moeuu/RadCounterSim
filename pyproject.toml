@@ -14,9 +14,11 @@ dependencies = [
   "numpy>=2.1,<3",
   "pandas>=2.2,<3",
   "pyarrow>=18,<24",
+  "pycollada>=0.8,<1",
   "pydantic>=2.10,<3",
   "pyyaml>=6.0,<7",
   "scipy>=1.14,<2",
+  "trimesh>=4.6,<5",
 ]
 
 [project.scripts]
@@ -24,6 +26,9 @@ radcounter-validate = "radcounter.core.cli:validate_main"
 radcounter-headless = "radcounter.core.cli:headless_main"
 radcounter-experiments = "radcounter.core.experiments.cli:experiments_main"
 radcounter-report = "radcounter.core.experiments.cli:report_main"
+radcounter-import-environment = "radcounter.core.environment.cli:main"
+radcounter-build-large-environment = "radcounter.core.environment.large_cli:main"
+radcounter-robot-command = "radcounter.core.robots.command_io:command_main"
 
 [dependency-groups]
 dev = [
@@ -36,6 +41,12 @@ native = [
   "cmake>=4.0,<5",
   "ninja>=1.13,<2",
   "pybind11>=3.0,<4",
+]
+cad = [
+  "gmsh>=4.13,<5",
+]
+validation = [
+    "pymavlink>=2.4.49,<3",
 ]
 
 [tool.uv]

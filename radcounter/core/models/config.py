@@ -8,6 +8,8 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from radcounter.core.environment.models import EnvironmentImportConfig
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -73,6 +75,7 @@ class ScenarioConfig(StrictModel):
     scenario_id: str = Field(min_length=1)
     runtime: RuntimeConfig
     radiation: RadiationConfig = RadiationConfig()
+    environment: EnvironmentImportConfig | None = None
     isotopes: tuple[IsotopeConfig, ...] = Field(min_length=1)
     point_sources: tuple[PointSourceConfig, ...] = ()
     detector: DetectorConfig
@@ -89,8 +92,6 @@ class ScenarioConfig(StrictModel):
         missing = {source.isotope_id for source in self.point_sources} - isotope_ids
         if missing:
             raise ValueError(f"source isotope references are missing: {sorted(missing)}")
-        if self.radiation.transport_backend == "embree":
-            raise ValueError("embree scenarios require the native runtime, not yet available")
         return self
 
 

@@ -1,0 +1,51 @@
+schema_version: 1
+minimum_endurance_s: 600
+gates:
+  - id: linux-nvidia-4gb-r550
+    runner_labels: [self-hosted, linux, x64, nvidia, vram-4gb, driver-r550]
+    expected_os: linux
+    vram_class: 4gb
+    minimum_gpu_count: 1
+    driver_pattern: '550\..+'
+    performance_profile: weak_gpu
+  - id: linux-nvidia-8gb-r550
+    runner_labels: [self-hosted, linux, x64, nvidia, vram-8gb, driver-r550]
+    expected_os: linux
+    vram_class: 8gb
+    minimum_gpu_count: 1
+    driver_pattern: '550\..+'
+    performance_profile: weak_gpu
+  - id: linux-nvidia-8gb-r580
+    runner_labels: [self-hosted, linux, x64, nvidia, vram-8gb, driver-r580]
+    expected_os: linux
+    vram_class: 8gb
+    minimum_gpu_count: 1
+    driver_pattern: '580\..+'
+    performance_profile: weak_gpu
+  - id: linux-dual-nvidia-8gb-r580
+    runner_labels: [self-hosted, linux, x64, nvidia, dual-gpu, vram-8gb, driver-r580]
+    expected_os: linux
+    vram_class: 8gb
+    minimum_gpu_count: 2
+    driver_pattern: '580\..+'
+    performance_profile: balanced_gpu
+  - id: linux-nvidia-24gb-r580
+    runner_labels: [self-hosted, linux, x64, nvidia, vram-24gb, driver-r580]
+    expected_os: linux
+    vram_class: 24gb
+    minimum_gpu_count: 1
+    driver_pattern: '580\..+'
+    performance_profile: balanced_gpu
+  - id: windows-nvidia-8gb-r580
+    runner_labels: [self-hosted, windows, x64, nvidia, vram-8gb, driver-r580]
+    expected_os: windows
+    vram_class: 8gb
+    minimum_gpu_count: 1
+    driver_pattern: '580\..+'
+    performance_profile: weak_gpu
+artifacts:
+  - nvidia-smi.txt
+  - isaac-version.txt
+  - metrics.json
+  - hardware-gate.json
+  - simulation.log

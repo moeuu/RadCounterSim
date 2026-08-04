@@ -1,0 +1,186 @@
+schema_version: 1
+robots:
+  - id: survey_ugv
+    uri: assets/robots/packbot_fukushima.urdf
+    format: urdf
+    prim_path: /World/Robots/SurveyUGV
+    robot_type: wheeled
+    reference:
+      model_id: irobot-packbot-fukushima
+      manufacturer: iRobot
+      model: PackBot, Fukushima Daiichi deployment configuration
+      source_urls: [https://www.tepco.co.jp/en/nu/fukushima-np/f1-roadmap/images/11042801a-e.pdf]
+      geometry_fidelity: reference_procedural
+      dimensions_m: [0.70, 0.53, 0.18]
+      mass_kg: 35.0
+    fixed_base: false
+    base_controller:
+      type: differential
+      joint_names: [left_track_joint, right_track_joint]
+      wheel_radius_m: 0.08
+      track_width_m: 0.41
+      maximum_linear_speed_m_s: 2.58
+      maximum_angular_speed_rad_s: 2.0
+    sensors:
+      - id: roof_lidar
+        type: lidar
+        parent_link: lidar_link
+        frame_id: survey_ugv/lidar
+        update_rate_hz: 10.0
+        pose:
+          translation_m: [0.0, 0.0, 0.0]
+          rotation_rpy_deg: [0.0, 0.0, 0.0]
+        lidar:
+          dimension: 3d
+          model: Example_Rotary
+          annotators: [generic-model-output]
+          draw_point_cloud: true
+          minimum_range_m: 0.3
+          maximum_range_m: 100.0
+        ros:
+          enabled: true
+          namespace: /survey_ugv
+          topics:
+            point_cloud: lidar/points
+      - id: front_rgbd
+        type: camera
+        parent_link: camera_link
+        frame_id: survey_ugv/front_rgbd
+        update_rate_hz: 20.0
+        pose:
+          translation_m: [0.0, 0.0, 0.0]
+          rotation_rpy_deg: [0.0, -8.0, 0.0]
+        camera:
+          width_px: 1280
+          height_px: 720
+          annotators: [rgb, distance_to_image_plane]
+          focal_length_mm: 18.0
+          clipping_range_m: [0.1, 100.0]
+        ros:
+          enabled: true
+          namespace: /survey_ugv
+          topics:
+            rgb: camera/color/image_raw
+            depth: camera/depth/image_raw
+            info: camera/camera_info
+      - id: gm_counter
+        type: radiation
+        parent_link: radiation_link
+        frame_id: survey_ugv/gm
+        update_rate_hz: 2.0
+        pose:
+          translation_m: [0.0, 0.0, 0.0]
+          rotation_rpy_deg: [0.0, 0.0, 0.0]
+        radiation:
+          detector_model_id: gm_tube
+          integration_time_s: 0.5
+      - id: directional_nai
+        type: radiation
+        parent_link: camera_link
+        update_rate_hz: 2.0
+        pose:
+          translation_m: [0.12, 0.0, 0.0]
+          rotation_rpy_deg: [0.0, 0.0, 0.0]
+        radiation:
+          detector_model_id: collimated_nai
+          integration_time_s: 0.5
+
+  - id: survey_drone
+    uri: assets/robots/elios3_rad.urdf
+    format: urdf
+    prim_path: /World/Robots/SurveyDrone
+    robot_type: aerial
+    reference:
+      model_id: flyability-elios3-rad
+      manufacturer: Flyability / Mirion Technologies
+      model: Elios 3 RAD
+      source_urls: [https://knowledge.flyability.com/aircraft/elios-3/elios-3-payload/radiation-sensor]
+      geometry_fidelity: reference_procedural
+      dimensions_m: [0.48, 0.48, 0.38]
+    fixed_base: false
+    translation_m: [2.0, 0.0, 2.5]
+    base_controller:
+      type: aerial
+      maximum_linear_speed_m_s: 3.0
+      maximum_vertical_speed_m_s: 1.5
+      maximum_angular_speed_rad_s: 2.0
+      maximum_roll_pitch_rate_rad_s: 1.0
+    sensors:
+      - id: mapping_lidar
+        type: lidar
+        parent_link: lidar_link
+        update_rate_hz: 15.0
+        pose:
+          translation_m: [0.0, 0.0, 0.0]
+          rotation_rpy_deg: [0.0, 0.0, 0.0]
+        lidar:
+          dimension: 3d
+          model: Example_Solid_State
+          annotators: [generic-model-output]
+          maximum_range_m: 60.0
+      - id: nadir_camera
+        type: camera
+        parent_link: camera_link
+        update_rate_hz: 30.0
+        pose:
+          translation_m: [0.0, 0.0, 0.0]
+          rotation_rpy_deg: [0.0, -90.0, 0.0]
+        camera:
+          width_px: 1920
+          height_px: 1080
+          annotators: [rgb, distance_to_camera, semantic_segmentation]
+          focal_length_mm: 24.0
+          clipping_range_m: [0.2, 250.0]
+      - id: lightweight_czt
+        type: radiation
+        parent_link: radiation_link
+        update_rate_hz: 5.0
+        pose:
+          translation_m: [0.0, 0.0, 0.0]
+          rotation_rpy_deg: [0.0, 0.0, 0.0]
+        radiation:
+          detector_model_id: czt
+          integration_time_s: 0.2
+
+  - id: mitigation_ugv
+    uri: assets/robots/mhi_meister.xacro
+    format: xacro
+    prim_path: /World/Robots/MitigationUGV
+    robot_type: mobile_manipulator
+    reference:
+      model_id: mhi-meister
+      manufacturer: Mitsubishi Heavy Industries
+      model: MEISTeR
+      source_urls: [https://www.mhi.com/business/products-services/energy-environment/nuclear-power-generation/robot-mechatronics/meister]
+      geometry_fidelity: reference_procedural
+      dimensions_m: [1.25, 0.70, 1.30]
+      mass_kg: 440.0
+    fixed_base: false
+    package_paths: [ros2_ws/install]
+    translation_m: [-2.0, 0.0, 0.0]
+    base_controller:
+      type: differential
+      joint_names: [left_track_drive_joint, right_track_drive_joint]
+      wheel_radius_m: 0.11
+      track_width_m: 0.57
+    sensors:
+      - id: manipulation_depth
+        type: camera
+        parent_link: right_tool0
+        update_rate_hz: 30.0
+        pose:
+          translation_m: [0.08, 0.0, 0.03]
+          rotation_rpy_deg: [0.0, 0.0, 0.0]
+        camera:
+          width_px: 640
+          height_px: 480
+          annotators: [rgb, distance_to_image_plane]
+          focal_length_mm: 16.0
+          clipping_range_m: [0.05, 10.0]
+      - id: dose_meter
+        type: radiation
+        parent_link: base_link
+        update_rate_hz: 10.0
+        radiation:
+          detector_model_id: ion_chamber
+          integration_time_s: 0.1

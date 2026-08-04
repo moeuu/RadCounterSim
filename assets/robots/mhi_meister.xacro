@@ -1,0 +1,47 @@
+<?xml version="1.0"?>
+<!-- Original reference geometry based on Mitsubishi Heavy Industries specifications. -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="mhi_meister_reference">
+  <material name="mhi_yellow"><color rgba="0.88 0.62 0.06 1"/></material>
+  <material name="rubber"><color rgba="0.035 0.04 0.042 1"/></material>
+  <material name="tool"><color rgba="0.16 0.17 0.16 1"/></material>
+  <xacro:macro name="inertial" params="mass:=1">
+    <inertial><mass value="${mass}"/><inertia ixx="0.01" ixy="0" ixz="0" iyy="0.01" iyz="0" izz="0.01"/></inertial>
+  </xacro:macro>
+  <xacro:macro name="crawler" params="name x y">
+    <link name="${name}_crawler_link"><xacro:inertial mass="12"/><visual><geometry><box size="0.48 0.13 0.22"/></geometry><material name="rubber"/></visual><collision><geometry><box size="0.48 0.13 0.22"/></geometry></collision></link>
+    <joint name="${name}_crawler_pitch_joint" type="revolute"><parent link="base_link"/><child link="${name}_crawler_link"/><origin xyz="${x} ${y} 0.15"/><axis xyz="0 1 0"/><limit lower="-0.65" upper="0.65" effort="800" velocity="1"/></joint>
+  </xacro:macro>
+  <xacro:macro name="arm_link" params="prefix index parent z axis">
+    <link name="${prefix}_arm_link_${index}"><xacro:inertial mass="3"/><visual><origin xyz="0 0 ${z/2}"/><geometry><cylinder radius="0.035" length="${z}"/></geometry><material name="mhi_yellow"/></visual></link>
+    <joint name="${prefix}_arm_joint_${index}" type="revolute"><parent link="${parent}"/><child link="${prefix}_arm_link_${index}"/><axis xyz="${axis}"/><limit lower="-2.7" upper="2.7" effort="150" velocity="1.2"/></joint>
+  </xacro:macro>
+  <xacro:macro name="seven_axis_arm" params="prefix y">
+    <link name="${prefix}_shoulder"><xacro:inertial mass="6"/><visual><geometry><sphere radius="0.06"/></geometry><material name="tool"/></visual></link>
+    <joint name="${prefix}_shoulder_mount" type="fixed"><parent link="upper_body_link"/><child link="${prefix}_shoulder"/><origin xyz="0.12 ${y} 0.16"/></joint>
+    <xacro:arm_link prefix="${prefix}" index="1" parent="${prefix}_shoulder" z="0.18" axis="0 0 1"/>
+    <xacro:arm_link prefix="${prefix}" index="2" parent="${prefix}_arm_link_1" z="0.17" axis="0 1 0"/>
+    <xacro:arm_link prefix="${prefix}" index="3" parent="${prefix}_arm_link_2" z="0.16" axis="1 0 0"/>
+    <xacro:arm_link prefix="${prefix}" index="4" parent="${prefix}_arm_link_3" z="0.14" axis="0 1 0"/>
+    <xacro:arm_link prefix="${prefix}" index="5" parent="${prefix}_arm_link_4" z="0.12" axis="1 0 0"/>
+    <xacro:arm_link prefix="${prefix}" index="6" parent="${prefix}_arm_link_5" z="0.10" axis="0 1 0"/>
+    <xacro:arm_link prefix="${prefix}" index="7" parent="${prefix}_arm_link_6" z="0.08" axis="0 0 1"/>
+    <link name="${prefix}_tool0"/><joint name="${prefix}_tool_fixed" type="fixed"><parent link="${prefix}_arm_link_7"/><child link="${prefix}_tool0"/><origin xyz="0 0 0.08"/></joint>
+  </xacro:macro>
+  <link name="base_link"><inertial><origin xyz="0 0 0.35"/><mass value="330"/><inertia ixx="24" ixy="0" ixz="0" iyy="45" iyz="0" izz="50"/></inertial><visual><origin xyz="0 0 0.29"/><geometry><box size="0.72 0.46 0.20"/></geometry><material name="mhi_yellow"/></visual><collision><origin xyz="0 0 0.28"/><geometry><box size="0.76 0.48 0.20"/></geometry></collision></link>
+  <xacro:crawler name="front_left" x="0.34" y="0.285"/>
+  <xacro:crawler name="front_right" x="0.34" y="-0.285"/>
+  <xacro:crawler name="rear_left" x="-0.34" y="0.285"/>
+  <xacro:crawler name="rear_right" x="-0.34" y="-0.285"/>
+  <link name="left_drive"><xacro:inertial/><visual><geometry><cylinder radius="0.11" length="0.12"/></geometry><material name="tool"/></visual></link>
+  <joint name="left_track_drive_joint" type="continuous"><parent link="base_link"/><child link="left_drive"/><origin xyz="0 0.285 0.15" rpy="1.5708 0 0"/><axis xyz="0 0 1"/><limit effort="1200" velocity="6"/></joint>
+  <link name="right_drive"><xacro:inertial/><visual><geometry><cylinder radius="0.11" length="0.12"/></geometry><material name="tool"/></visual></link>
+  <joint name="right_track_drive_joint" type="continuous"><parent link="base_link"/><child link="right_drive"/><origin xyz="0 -0.285 0.15" rpy="1.5708 0 0"/><axis xyz="0 0 1"/><limit effort="1200" velocity="6"/></joint>
+  <link name="upper_body_link"><xacro:inertial mass="40"/><visual><origin xyz="0 0 0.19"/><geometry><box size="0.50 0.45 0.38"/></geometry><material name="mhi_yellow"/></visual></link>
+  <joint name="upper_body_pitch_joint" type="revolute"><parent link="base_link"/><child link="upper_body_link"/><origin xyz="-0.05 0 0.43"/><axis xyz="0 1 0"/><limit lower="-0.45" upper="0.45" effort="1500" velocity="0.5"/></joint>
+  <xacro:seven_axis_arm prefix="left" y="0.22"/>
+  <xacro:seven_axis_arm prefix="right" y="-0.22"/>
+  <link name="head_camera_link"><visual><geometry><box size="0.08 0.15 0.08"/></geometry><material name="tool"/></visual></link>
+  <joint name="head_camera_fixed" type="fixed"><parent link="upper_body_link"/><child link="head_camera_link"/><origin xyz="0.20 0 0.43"/></joint>
+  <link name="dose_meter_link"><visual><geometry><box size="0.12 0.07 0.10"/></geometry><material name="tool"/></visual></link>
+  <joint name="dose_meter_fixed" type="fixed"><parent link="upper_body_link"/><child link="dose_meter_link"/><origin xyz="0.02 0.25 0.23"/></joint>
+</robot>

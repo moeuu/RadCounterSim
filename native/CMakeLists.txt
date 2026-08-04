@@ -1,12 +1,19 @@
 cmake_minimum_required(VERSION 3.24)
 project(radcounter_embree LANGUAGES CXX)
 
+if(POLICY CMP0144)
+  cmake_policy(SET CMP0144 NEW)
+endif()
+
+set(PYBIND11_FINDPYTHON ON)
+find_package(Python COMPONENTS Interpreter Development.Module REQUIRED)
 find_package(embree 4 CONFIG REQUIRED)
 find_package(pybind11 CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 
 pybind11_add_module(_radcounter_embree src/embree_backend.cpp)
 target_compile_features(_radcounter_embree PRIVATE cxx_std_17)
-target_link_libraries(_radcounter_embree PRIVATE embree)
+target_link_libraries(_radcounter_embree PRIVATE embree Threads::Threads)
 
 if(MSVC)
   target_compile_options(_radcounter_embree PRIVATE /W4 /permissive-)

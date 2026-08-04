@@ -13,6 +13,7 @@ ros2_ws/log/
 dist/
 *.egg-info/
 outputs/
+.radcounter/
 *.log
 .idea/
 .vscode/

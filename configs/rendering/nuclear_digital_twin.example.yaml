@@ -1,0 +1,87 @@
+schema_version: "1.0"
+asset:
+  # Native metric USD from photogrammetry is preferred. OBJ/FBX/glTF are
+  # texture-preserving converted by Omni asset converter and cached.
+  visual_uri: ${RADCOUNTER_FACILITY_USD}
+  physics_manifest_uri: null
+  source_type: hybrid
+  prim_path: /World/DigitalTwin
+  source_meters_per_unit: null
+  source_up_axis: auto
+  preserve_source_materials: true
+  instanceable_patterns:
+    - /World/DigitalTwin/**/PipeSupport_*
+    - /World/DigitalTwin/**/Handrail_*
+  cache_directory: ../../.cache/radcounter/digital-twin
+material_library_uri: ../materials/nuclear_pbr.yaml
+material_bindings:
+  - pattern: concrete
+    material_id: concrete
+  - pattern: epoxy_floor
+    material_id: epoxy_floor
+  - pattern: stainless_steel
+    material_id: stainless_steel
+  - pattern: lead
+    material_id: lead
+lighting:
+  calibration_id: facility-lux-survey-v1
+  exposure_compensation: 0.0
+  lights:
+    - id: ambient
+      light_type: dome
+      intensity: 120.0
+      color_rgb: [0.72, 0.79, 0.84]
+    - id: ceiling_a
+      light_type: rect
+      translation_m: [0.0, -3.0, 5.5]
+      rotation_rpy_deg: [0.0, 0.0, 0.0]
+      width_m: 1.2
+      height_m: 0.25
+      intensity: 3200.0
+      color_temperature_k: 4300.0
+    - id: ceiling_b
+      light_type: rect
+      translation_m: [0.0, 3.0, 5.5]
+      width_m: 1.2
+      height_m: 0.25
+      intensity: 3200.0
+      color_temperature_k: 4300.0
+effects:
+  bounds_min_m: [-50.0, -50.0, -2.0]
+  bounds_max_m: [50.0, 50.0, 20.0]
+  fog_density: 0.008
+  dust_particle_count: 18000
+  steam_particle_count: 6000
+  spray_particle_count: 6000
+  wet_trace_enabled: true
+camera_radiation:
+  enabled: true
+  onset_dose_rate_gy_h: 0.1
+  transient_hits_per_mpix_s_per_gy_h: 90.0
+  permanent_hot_pixel_fraction_per_gy: 0.000002
+  desaturation_half_dose_rate_gy_h: 20.0
+renderer:
+  mode: auto
+  allow_path_tracing_for_capture: true
+  target_frame_rate_hz: 30.0
+  base_resolution_px: [1280, 720]
+  adaptive: true
+render_products:
+  - id: inspection_rgb
+    kind: rgb
+    sensor_prim_path: /World/Robots/InspectionRobot/base_link/RadCounterSensors/front_camera
+    resolution_px: [1280, 720]
+    update_rate_hz: 15.0
+    apply_high_dose_effects: true
+  - id: inspection_depth
+    kind: depth
+    sensor_prim_path: /World/Robots/InspectionRobot/base_link/RadCounterSensors/front_camera
+    resolution_px: [1280, 720]
+    update_rate_hz: 10.0
+  - id: inspection_lidar
+    kind: lidar
+    sensor_prim_path: /World/Robots/InspectionRobot/base_link/RadCounterSensors/lidar
+    update_rate_hz: 10.0
+  - id: radiation_field
+    kind: radiation
+    update_rate_hz: 2.0

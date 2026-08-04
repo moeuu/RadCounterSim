@@ -9,12 +9,23 @@ def test_isaac_extension_declares_direct_host_dependencies() -> None:
     assert config["python"]["module"][0]["name"] == "radcounter.isaac"
     assert set(config["dependencies"]) == {
         "omni.kit.uiapp",
+        "omni.appwindow",
         "omni.usd",
         "omni.timeline",
         "omni.physx",
         "isaacsim.ros2.bridge",
+        "isaacsim.robot_motion.motion_generation",
+        "isaacsim.robot.wheeled_robots",
+        "isaacsim.asset.importer.urdf",
+        "isaacsim.asset.importer.mjcf",
+        "isaacsim.core.experimental.prims",
     }
     assert config["dependencies"]["isaacsim.ros2.bridge"]["optional"] is True
+    assert config["dependencies"]["isaacsim.robot_motion.motion_generation"]["optional"] is True
+    assert config["dependencies"]["isaacsim.robot.wheeled_robots"]["optional"] is True
+    assert config["dependencies"]["isaacsim.asset.importer.urdf"]["optional"] is True
+    assert config["dependencies"]["isaacsim.asset.importer.mjcf"]["optional"] is True
+    assert config["dependencies"]["isaacsim.core.experimental.prims"]["optional"] is True
 
 
 def test_isaac_extension_contains_runtime_physics_and_embree_adapters() -> None:
@@ -26,5 +37,7 @@ def test_isaac_extension_contains_runtime_physics_and_embree_adapters() -> None:
         "ui/window.py",
         "physics/actions.py",
         "usd/embree_scene.py",
+        "robot/input_router.py",
+        "robot/control_window.py",
     )
     assert all((package / relative_path).is_file() for relative_path in required)

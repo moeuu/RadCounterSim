@@ -1,0 +1,72 @@
+"""Digital-twin rendering, camera image formation, and validation metrics."""
+
+from radcounter.core.rendering.camera import CameraFrameResult, HighDoseCameraModel
+from radcounter.core.rendering.evaluation import (
+    DepthComparison,
+    RgbComparison,
+    compare_depth,
+    compare_rgb,
+)
+from radcounter.core.rendering.materials import nuclear_facility_materials
+from radcounter.core.rendering.models import (
+    DigitalTwinAssetConfig,
+    DigitalTwinRenderingConfig,
+    DigitalTwinSourceType,
+    EnvironmentEffectsConfig,
+    FacilityLightConfig,
+    FacilityLightingConfig,
+    HighDoseCameraConfig,
+    LightType,
+    MaterialBindingRuleConfig,
+    PbrMaterialConfig,
+    PbrTextureSetConfig,
+    RendererPolicyConfig,
+    RenderMode,
+    RenderProductConfig,
+    RenderProductKind,
+    RenderPurpose,
+    RenderQualityTier,
+    load_digital_twin_config,
+)
+from radcounter.core.rendering.policy import (
+    GpuCapabilities,
+    RenderBudget,
+    budget_for_tier,
+    choose_render_budget,
+    probe_gpu_capabilities,
+    select_quality_tier,
+)
+
+__all__ = [
+    "CameraFrameResult",
+    "DepthComparison",
+    "DigitalTwinAssetConfig",
+    "DigitalTwinRenderingConfig",
+    "DigitalTwinSourceType",
+    "EnvironmentEffectsConfig",
+    "FacilityLightConfig",
+    "FacilityLightingConfig",
+    "GpuCapabilities",
+    "HighDoseCameraConfig",
+    "HighDoseCameraModel",
+    "LightType",
+    "MaterialBindingRuleConfig",
+    "PbrMaterialConfig",
+    "PbrTextureSetConfig",
+    "RenderBudget",
+    "RendererPolicyConfig",
+    "RenderMode",
+    "RenderProductConfig",
+    "RenderProductKind",
+    "RenderPurpose",
+    "RenderQualityTier",
+    "RgbComparison",
+    "budget_for_tier",
+    "choose_render_budget",
+    "compare_depth",
+    "compare_rgb",
+    "load_digital_twin_config",
+    "nuclear_facility_materials",
+    "probe_gpu_capabilities",
+    "select_quality_tier",
+]

@@ -1,0 +1,24 @@
+schema_version: "1.0"
+detector:
+  model_id: laboratory_custom_czt
+  display_name: Laboratory custom CZT detector
+  family: semiconductor
+  directionality: collimated
+  outputs: [counts, count_rate, spectrum, direction]
+  active_area_m2: 0.0004
+  background_cps: 0.2
+  dead_time_s: 0.000001
+  dead_time_model: nonparalyzable
+  maximum_count_rate_cps: 500000
+  energy_resolution_fwhm_fraction_at_662kev: 0.025
+  energy_bin_edges_kev: [0, 100, 200, 300, 400, 500, 600, 700, 800, 1000, 1500]
+  field_of_view_half_angle_deg: 25
+  off_axis_leakage_fraction: 0.01
+  particle_responses:
+    - radiation_type: gamma
+      response_csv: custom_detector_response.csv
+      energy_column: energy_kev
+      efficiency_column: efficiency
+  metadata:
+    manufacturer: laboratory
+    interface: custom
