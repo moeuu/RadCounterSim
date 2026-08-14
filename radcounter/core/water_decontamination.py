@@ -108,7 +108,7 @@ class WaterSurfaceDecontaminator:
         state: WaterDecontaminationState,
         *,
         washability: np.ndarray | None = None,
-        surface_normal_world: tuple[float, float, float] = (0.0, 0.0, 1.0),
+        surface_normal_world: tuple[float, float, float] | None = None,
         runoff_direction_world_xy: tuple[float, float] = (1.0, 0.0),
     ) -> None:
         self.grid = grid
@@ -116,10 +116,15 @@ class WaterSurfaceDecontaminator:
         self.reference_activity_bq = (
             grid.total_activity_bq + state.captured_activity_bq + state.discharged_activity_bq
         )
-        normal = np.asarray(surface_normal_world, dtype=np.float64)
+        normal = np.asarray(
+            grid.surface_normal_world if surface_normal_world is None else surface_normal_world,
+            dtype=np.float64,
+        )
         if np.linalg.norm(normal) <= 1e-12:
             raise ValueError("surface normal cannot be zero")
         self.surface_normal = normal / np.linalg.norm(normal)
+        if abs(float(np.dot(self.surface_normal, grid.surface_normal_world))) < 1.0 - 1e-6:
+            raise ValueError("surface normal must align with the source grid plane")
         runoff = np.asarray(runoff_direction_world_xy, dtype=np.float64)
         if np.linalg.norm(runoff) <= 1e-12:
             raise ValueError("runoff direction cannot be zero")
@@ -309,20 +314,14 @@ class WaterSurfaceDecontaminator:
     def _build_runoff_targets(self) -> np.ndarray:
         step = min(self.grid.cell_size_x_m, self.grid.cell_size_y_m) * 1.05
         targets = np.full(len(self.grid.activity_bq), -1, dtype=np.int64)
-        lower = (
-            self.grid.center_world_m[:2]
-            - np.asarray([self.grid.size_x_m, self.grid.size_y_m]) * 0.5
-        )
-        upper = (
-            self.grid.center_world_m[:2]
-            + np.asarray([self.grid.size_x_m, self.grid.size_y_m]) * 0.5
-        )
-        for index, center in enumerate(self.grid.centers_world_m[:, :2]):
+        lower = -np.asarray([self.grid.size_x_m, self.grid.size_y_m]) * 0.5
+        upper = np.asarray([self.grid.size_x_m, self.grid.size_y_m]) * 0.5
+        for index, center in enumerate(self.grid.centers_surface_uv_m):
             target_point = center + self.runoff_direction_xy * step
             if np.any(target_point < lower) or np.any(target_point > upper):
                 continue
             distance = np.linalg.norm(
-                self.grid.centers_world_m[:, :2] - target_point,
+                self.grid.centers_surface_uv_m - target_point,
                 axis=1,
             )
             target = int(np.argmin(distance))

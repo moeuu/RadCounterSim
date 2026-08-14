@@ -1,5 +1,17 @@
 # Changelog
 
+## Natural-language application control
+
+- Added bilingual Japanese/English command interpretation through a bundled,
+  loopback-only llama.cpp sidecar and Qwen3-4B GGUF model.
+- Added schema-constrained plans, live candidate resolution, deterministic
+  feasibility validation, physical-action confirmation, and JSONL audits.
+- Added bounded public-result workflow conditions, multi-pass irregular-surface
+  decontamination, multi-target station/surface expansion, and stateful shield
+  placement-to-reposition transitions without duplicate inventory consumption.
+- Added CPU/Vulkan/CUDA runtime packaging, verified model installation, a single app
+  launcher, and a Linux desktop entry while keeping Isaac Sim user-installed.
+
 ## Unreleased
 
 - Created the uv-managed independent RadCounterSim repository.
@@ -30,4 +42,11 @@
   boundary, uv-managed batch execution, reproducibility manifests, JSONL,
   Parquet/JSON/NPZ outputs, self-contained HTML reports, analytic validation,
   and one-command demo scripts.
-- External Isaac Sim, Embree, and ROS 2 acceptance gates remain open.
+- Added manufacturer-asset Ridgeback + Franka and Nova Carter execution with
+  Lula IK, articulated base/arm/finger control, PhysX fixed-joint grasping,
+  contact-driven decontamination, shield placement, object relocation, and
+  disposal validation.
+- Passed the local Isaac Sim, Embree, PhysX, and ROS 2 runtime gates. The
+  canonical GPU/renderer release manifest remains open.
+- Cleared all 163 repository-wide Ruff violations and documented the remaining
+  specification gaps in `SIMULATOR_REQUIREMENT_AUDIT.md`.

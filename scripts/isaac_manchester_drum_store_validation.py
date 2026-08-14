@@ -7,14 +7,13 @@ import argparse
 import asyncio
 import json
 import math
-from pathlib import Path
 import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 from isaacsim import SimulationApp
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -47,9 +46,7 @@ def _set_pose(prim, pose, *, scale=None) -> None:
     xform = UsdGeom.Xformable(prim)
     xform.ClearXformOpOrder()
     xform.AddTranslateOp().Set(Gf.Vec3d(*pose.translation_m))
-    xform.AddRotateXYZOp().Set(
-        Gf.Vec3f(*(math.degrees(value) for value in pose.rotation_rpy_rad))
-    )
+    xform.AddRotateXYZOp().Set(Gf.Vec3f(*(math.degrees(value) for value in pose.rotation_rpy_rad)))
     if scale is not None:
         xform.AddScaleOp().Set(Gf.Vec3f(*scale))
 
@@ -79,7 +76,9 @@ async def _convert_visuals(model, cache_root: Path) -> dict[Path, Path]:
         print(f"[convert {index}/{len(unique_meshes)}] {relative}", flush=True)
         task = converter.create_converter_task(str(source), str(destination), None, context)
         if not await task.wait_until_finished():
-            error = task.get_error_message() if hasattr(task, "get_error_message") else "unknown error"
+            error = (
+                task.get_error_message() if hasattr(task, "get_error_message") else "unknown error"
+            )
             raise RuntimeError(f"asset conversion failed for {source}: {error}")
         converted[source] = destination
     return converted
@@ -142,7 +141,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     free_vram_before = _free_vram_gb()
     constrained = free_vram_before is not None and free_vram_before < 6.0
-    width, height = ((960, 540) if constrained else (1600, 900))
+    width, height = (960, 540) if constrained else (1600, 900)
     renderer = "MinimalRendering" if constrained else "RayTracedLighting"
 
     app = SimulationApp(
@@ -162,12 +161,12 @@ def main() -> None:
     import omni.kit.app
     import omni.kit.viewport.utility
     import omni.usd
-    from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdShade
+    from pxr import Gf, Usd, UsdGeom, UsdLux, UsdShade
 
     stage = omni.usd.get_context().get_stage()
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
     UsdGeom.SetStageMetersPerUnit(stage, 1.0)
-    world = UsdGeom.Xform.Define(stage, "/World")
+    UsdGeom.Xform.Define(stage, "/World")
     model_root = UsdGeom.Xform.Define(stage, "/World/Manchester500L")
     _set_pose(model_root.GetPrim(), model.pose)
     UsdGeom.Scope.Define(stage, "/World/Looks")

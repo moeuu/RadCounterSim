@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.cache/
 .coverage
 htmlcov/
 build/
@@ -13,7 +14,14 @@ ros2_ws/log/
 dist/
 *.egg-info/
 outputs/
+artifacts/
+log/
 .radcounter/
 *.log
+runtime/llm/bin/*/
+runtime/llm/models/*.gguf
+runtime/llm/logs/
+!runtime/llm/bin/.gitkeep
+!runtime/llm/models/.gitkeep
 .idea/
 .vscode/

@@ -1,16 +1,16 @@
 robot_id: measurement-robot-1
-reference_model_id: irobot-packbot-fukushima
-manufacturer: iRobot
-model: PackBot, Fukushima Daiichi deployment configuration
-geometry_fidelity: reference_procedural
-source: https://www.tepco.co.jp/en/nu/fukushima-np/f1-roadmap/images/11042801a-e.pdf
-controller: packbot_differential_crawler
-asset: assets/robots/packbot_fukushima.urdf
-articulation_root: /World/MeasurementRobot/base_link
-wheel_dof_names: [left_track_joint, right_track_joint]
-flipper_dof_names: [left_flipper_joint, right_flipper_joint]
-wheel_radius_m: 0.08
-wheel_base_m: 0.41
+reference_model_id: nvidia-nova-carter
+manufacturer: NVIDIA
+model: Nova Carter
+geometry_fidelity: manufacturer_asset
+source: https://docs.isaacsim.omniverse.nvidia.com/latest/assets/usd_assets_robots.html
+controller: nova_carter_differential_wheels
+asset: /Isaac/Robots/NVIDIA/NovaCarter/nova_carter.usd
+articulation_root: /World/MeasurementRobot/chassis_link
+wheel_dof_names: [joint_wheel_left, joint_wheel_right]
+flipper_dof_names: []
+wheel_radius_m: 0.14
+wheel_base_m: 0.413
 detector_id: omni-1
-detector_path: /World/MeasurementRobot/radiation_link/Detector
-detector_extrinsic_xyz_m: [0.03, 0.16, 0.41]
+detector_path: /World/MeasurementRobot/chassis_link/Detector
+detector_extrinsic_xyz_m: [0.0, 0.0, 0.72]

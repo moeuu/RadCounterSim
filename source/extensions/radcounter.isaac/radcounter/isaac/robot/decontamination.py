@@ -14,6 +14,8 @@ from typing import Any, Literal
 import numpy as np
 from numpy.typing import NDArray
 
+from radcounter.core.surface_decontamination import effective_contact_exposure_s
+
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
 
@@ -102,6 +104,14 @@ class ContactDrivenDecontaminator:
             self.activity_bq = np.asarray(payload["activity_bq"], dtype=np.float64)
             self.exposure = np.asarray(payload["cumulative_treatment_exposure"], dtype=np.float64)
             self.last_treated_step = np.asarray(payload["last_treated_step"], dtype=np.int64)
+        self.initial_activity_bq = self.activity_bq.copy()
+        from pxr import UsdGeom
+
+        authored_colors = UsdGeom.Gprim(surface).GetDisplayColorAttr().Get() or ()
+        initial_colors = np.asarray(authored_colors, dtype=np.float64)
+        self._initial_display_colors = (
+            initial_colors if initial_colors.shape == (len(self.activity_bq), 3) else None
+        )
         common = self._rng.normal()
         local = self._rng.normal(size=len(self.activity_bq))
         correlation = 0.75
@@ -140,6 +150,35 @@ class ContactDrivenDecontaminator:
         axis = axis_endpoint - center
         axis /= np.linalg.norm(axis)
         return samples, center, axis
+
+    def _update_surface_visuals(self) -> None:
+        """Fade each rendered face using the same remaining truth activity."""
+
+        if self._initial_display_colors is None:
+            return
+        from pxr import Gf, UsdGeom
+
+        surface = self.stage.GetPrimAtPath(self.surface_path)
+        gprim = UsdGeom.Gprim(surface)
+        fraction = np.divide(
+            self.activity_bq,
+            self.initial_activity_bq,
+            out=np.zeros_like(self.activity_bq),
+            where=self.initial_activity_bq > 0.0,
+        )
+        fraction = np.clip(fraction, 0.0, 1.0)
+        host_color = np.asarray((0.20, 0.27, 0.32), dtype=np.float64)
+        colors = host_color + fraction[:, None] * (
+            self._initial_display_colors - host_color
+        )
+        color_attr = gprim.GetDisplayColorAttr()
+        color_attr.Set([Gf.Vec3f(*color) for color in colors])
+        color_attr.SetMetadata("interpolation", UsdGeom.Tokens.uniform)
+        opacity_attr = gprim.GetDisplayOpacityAttr()
+        if not opacity_attr:
+            opacity_attr = gprim.CreateDisplayOpacityAttr()
+        opacity_attr.Set([0.0 if value < 0.10 else 1.0 for value in fraction])
+        opacity_attr.SetMetadata("interpolation", UsdGeom.Tokens.uniform)
 
     def tick(self, dt_s: float, simulation_step: int) -> TreatmentTickResult:
         import carb
@@ -180,10 +219,17 @@ class ContactDrivenDecontaminator:
             accepted += 1
             hit_counts[triangle_index] = hit_counts.get(triangle_index, 0) + 1
         removed_total = 0.0
-        footprint_count = max(len(self.config.footprint_points_local_m), 1)
-        for triangle_index, count in hit_counts.items():
+        effective_exposure_s = effective_contact_exposure_s(
+            dt_s,
+            speed,
+            self.config.max_surface_speed_m_s,
+        )
+        for triangle_index in hit_counts:
             row = self._row_by_triangle[triangle_index]
-            incremental_exposure = dt_s * count / footprint_count
+            # Ray count is spatial sampling density, not elapsed time.  Apply
+            # one contact tick per hit face so densifying the pad footprint
+            # cannot dilute treatment, matching SurfaceSourceGrid.apply_tool().
+            incremental_exposure = effective_exposure_s
             removal_fraction = 1.0 - math.exp(
                 -self.config.rate_constant_s_inv * incremental_exposure * self.truth_efficiency[row]
             )
@@ -197,6 +243,8 @@ class ContactDrivenDecontaminator:
             self._cumulative_removed += removed_total
             if self.config.transfer_mode == "transfer_to_waste":
                 self._transfer_to_waste(removed_total)
+            if simulation_step % 10 == 0:
+                self._update_surface_visuals()
         recontaminated = self.inject_recontamination(self.config.recontamination_rate_bq_s * dt_s)
         return TreatmentTickResult(
             accepted_contacts=accepted,
@@ -264,6 +312,7 @@ class ContactDrivenDecontaminator:
     def flush(self) -> str:
         if not self._dirty:
             return hashlib.sha256(self.activity_path.read_bytes()).hexdigest()
+        self._update_surface_visuals()
         self.activity_path.parent.mkdir(parents=True, exist_ok=True)
         file_descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{self.activity_path.stem}.",

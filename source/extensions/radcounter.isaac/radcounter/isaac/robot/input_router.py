@@ -104,6 +104,14 @@ class IsaacRobotInputRouter:
         self._keyboard_subscription = None
         self._gamepad_subscription = None
 
+    def close(self) -> None:
+        """Release Kit input subscriptions and an optional command server."""
+
+        self.detach_devices()
+        if self.command_server is not None:
+            self.command_server.close()
+            self.command_server = None
+
     def register_auto_controller(
         self,
         robot_id: str,

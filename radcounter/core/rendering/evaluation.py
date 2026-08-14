@@ -51,9 +51,7 @@ def _global_ssim(reference: np.ndarray, simulated: np.ndarray) -> float:
         variance_left, variance_right = float(left.var()), float(right.var())
         covariance = float(np.mean((left - mu_left) * (right - mu_right)))
         numerator = (2.0 * mu_left * mu_right + c1) * (2.0 * covariance + c2)
-        denominator = (
-            (mu_left**2 + mu_right**2 + c1) * (variance_left + variance_right + c2)
-        )
+        denominator = (mu_left**2 + mu_right**2 + c1) * (variance_left + variance_right + c2)
         scores.append(numerator / denominator)
     return float(np.mean(scores))
 
@@ -76,7 +74,9 @@ def _histogram_js(reference: np.ndarray, simulated: np.ndarray, bins: int = 64) 
         p /= p.sum()
         q /= q.sum()
         midpoint = 0.5 * (p + q)
-        values.append(0.5 * np.sum(p * np.log(p / midpoint)) + 0.5 * np.sum(q * np.log(q / midpoint)))
+        values.append(
+            0.5 * np.sum(p * np.log(p / midpoint)) + 0.5 * np.sum(q * np.log(q / midpoint))
+        )
     return float(np.mean(values))
 
 

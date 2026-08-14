@@ -3,6 +3,8 @@ import numpy as np
 from radcounter.core.surface_decontamination import (
     DecontaminationTool,
     SurfaceSourceGrid,
+    effective_contact_exposure_s,
+    irregular_deposition_field,
 )
 
 
@@ -71,3 +73,76 @@ def test_activity_is_monotonic_and_visual_color_tracks_cleaning() -> None:
     colors = grid.color_rgb()
     treated = grid.cumulative_exposure_s > 0.0
     assert colors[treated, 1].mean() > colors[~treated, 1].mean()
+
+
+def test_vertical_wall_grid_uses_surface_basis_for_contact() -> None:
+    grid = SurfaceSourceGrid(
+        cells_x=4,
+        cells_y=4,
+        size_x_m=2.0,
+        size_y_m=2.0,
+        center_world_m=(0.0, 1.0, 5.0),
+        activity_bq_per_cell=100.0,
+        surface_u_world=(1.0, 0.0, 0.0),
+        surface_v_world=(0.0, 0.0, 1.0),
+    )
+
+    step = grid.apply_tool(
+        _tool(),
+        tool_center_world_m=(0.5, 0.98, 5.5),
+        tool_yaw_rad=0.0,
+        surface_speed_m_s=0.0,
+        dt_s=1.0,
+    )
+
+    assert len(step.contacted_cells) == 4
+    assert step.removed_activity_bq > 0.0
+    assert np.allclose(grid.surface_normal_world, (0.0, -1.0, 0.0))
+
+
+def test_canonical_irregular_field_retains_reference_mask_invariants() -> None:
+    field = irregular_deposition_field().reshape(28, 48)
+    active = field > 0.0
+
+    assert int(np.count_nonzero(active)) == 497
+    assert int(active.size) == 1_344
+    assert field[active].std() > 60_000.0
+    assert not active[13, 21]  # clean hole inside the main deposition
+
+    seen: set[tuple[int, int]] = set()
+    component_sizes: list[int] = []
+    for row, column in np.argwhere(active):
+        start = (int(row), int(column))
+        if start in seen:
+            continue
+        pending = [start]
+        seen.add(start)
+        size = 0
+        while pending:
+            current_row, current_column = pending.pop()
+            size += 1
+            for row_delta in (-1, 0, 1):
+                for column_delta in (-1, 0, 1):
+                    if row_delta == column_delta == 0:
+                        continue
+                    neighbor = (
+                        current_row + row_delta,
+                        current_column + column_delta,
+                    )
+                    if (
+                        0 <= neighbor[0] < active.shape[0]
+                        and 0 <= neighbor[1] < active.shape[1]
+                        and active[neighbor]
+                        and neighbor not in seen
+                    ):
+                        seen.add(neighbor)
+                        pending.append(neighbor)
+        component_sizes.append(size)
+
+    assert sorted(component_sizes, reverse=True) == [477, 13, 7]
+
+
+def test_contact_exposure_is_one_speed_adjusted_tick_not_ray_count() -> None:
+    exposure = effective_contact_exposure_s(0.5, 0.1, 0.3)
+    assert np.isclose(exposure, 1.0 / 3.0)
+    assert effective_contact_exposure_s(0.5, 0.31, 0.3) == 0.0

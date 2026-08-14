@@ -62,6 +62,51 @@ Isaac Sim requires the user to review and accept NVIDIA's Omniverse EULA. The
 launch script never accepts it implicitly. After acceptance, launch with
 `OMNI_KIT_ACCEPT_EULA=YES ./scripts/run_isaac.sh`.
 
+## Articulated GUI workflow
+
+The GUI workflow loads NVIDIA's Clearpath Ridgeback + Franka Panda and Nova
+Carter assets. It drives real articulation and wheel joints, solves the
+seven-axis arm with Lula IK, closes the physical gripper before attaching a
+payload constraint, and performs contact-driven decontamination. Shield
+placement/correction, contaminated-drum relocation/disposal, and obstacle
+relocation all use the same base-arm-gripper sequence; operation-time USD pose
+teleports are prohibited.
+
+```bash
+export OMNI_KIT_ACCEPT_EULA=YES RADCOUNTER_HOST_ENV_NO_ROS=1
+source scripts/host_env.sh
+uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked python scripts/run_gui.py
+```
+
+Use `--headless --no-keep-open --phase-hold-s 0` for a noninteractive gate. The
+complete public audit is written to `artifacts/gui-validation/latest.json`.
+
+## Local natural-language application
+
+The interactive application accepts Japanese and English instructions, maps
+them to a strict allowlist, previews physical operations, and executes them
+through the existing workflow boundary. Release builds own a bundled
+`llama.cpp` sidecar and an official Qwen3-4B GGUF model; users do not install
+Ollama, PyTorch, or a Python inference SDK.
+
+Complex instructions can sequence up to 24 logical steps, tour every feasible
+measurement station, run bounded multi-pass irregular-surface decontamination
+against public removal/remaining/coverage conditions, and place then reposition
+physical shield panels at host-derived source-line fractions. Every physical
+attempt is revalidated against the live scene and remains confirmation-gated.
+
+```bash
+./scripts/build_llama_runtime.sh
+uv run python scripts/fetch_llm_model.py
+OMNI_KIT_ACCEPT_EULA=YES ./scripts/run_app.sh
+```
+
+Isaac Sim remains a user-installed prerequisite and is never redistributed by
+the OSS package. After initial setup, `radcounter-app` or the optional desktop
+entry launches the simulator and private local model as one application. See
+`docs/natural-language-control.md` for runtime layout, safety policy, hardware
+fallbacks, and packaging details.
+
 ## Safety boundary
 
 Estimator and planner APIs accept `BeliefState` and public observations only.

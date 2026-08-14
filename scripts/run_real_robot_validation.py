@@ -122,17 +122,6 @@ class _Panel:
             self.detail.set_value(detail)
 
 
-def _create_activity_map(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        path,
-        triangle_indices=np.arange(8, dtype=np.int64),
-        activity_bq=np.full(8, 2.5e6, dtype=np.float64),
-        cumulative_treatment_exposure=np.zeros(8, dtype=np.float64),
-        last_treated_step=np.full(8, -1, dtype=np.int64),
-    )
-
-
 def _configure_camera(
     stage: Any,
     *,
@@ -198,6 +187,7 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
         RidgebackFrankaController,
         add_real_robot_references,
         author_real_robot_task_scene,
+        create_decontamination_activity_map,
         enable_real_robot_extensions,
     )
     from radcounter.isaac.runtime import IsaacRadiationSimulation
@@ -218,7 +208,7 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
     for _ in range(120):
         app.update()
     activity_path = args.artifact.parent / "workbench_activity.npz"
-    _create_activity_map(activity_path)
+    create_decontamination_activity_map(activity_path)
     author_real_robot_task_scene(stage, activity_path, config=config)
     _configure_camera(stage)
     for _ in range(60):
@@ -298,24 +288,36 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
         "Contact-driven decontamination",
         "Franka is lowering a physical pad and sweeping the contaminated mesh.",
     )
-    if not franka.move_base((-0.08, 0.0, 0.0)):
+    travel_posture = franka.stow_arm()
+    if not travel_posture.success:
         raise AssertionError(
-            "Ridgeback could not establish workbench clearance: "
-            f"target={franka.last_base_target.tolist()}, "
-            f"actual={franka.last_base_positions.tolist()}"
+            f"Franka could not enter its travel posture: {travel_posture}"
+        )
+    decon_base_x = config.decon_workbench_center_m[0] - 0.90
+    decon_base_y = config.decon_workbench_center_m[1]
+    decon_route = (
+        (0.0, -1.50, 0.0),
+        (5.20, -1.50, 0.0),
+        (8.90, -1.50, 0.0),
+        (10.30, -1.50, 0.0),
+        (10.30, decon_base_y, 0.0),
+        (decon_base_x, decon_base_y, 0.0),
+    )
+    navigation_report = franka.navigate_route(decon_route, final_yaw_rad=0.0)
+    if not navigation_report.success:
+        raise AssertionError(
+            "Ridgeback could not reach the remote decontamination wall: "
+            f"{navigation_report}"
         )
     decontaminator = ContactDrivenDecontaminator(
         stage,
         config.decon_tool_path,
         config.decon_surface_path,
         DecontaminationConfig(
-            footprint_points_local_m=(
-                (-0.06, -0.045, 0.0),
-                (0.0, -0.045, 0.0),
-                (0.06, -0.045, 0.0),
-                (-0.06, 0.045, 0.0),
-                (0.0, 0.045, 0.0),
-                (0.06, 0.045, 0.0),
+            footprint_points_local_m=tuple(
+                (float(local_x), float(local_y), 0.0)
+                for local_x in np.linspace(-0.085, 0.085, 9)
+                for local_y in np.linspace(-0.065, 0.065, 9)
             ),
             treatment_axis_local=(0.0, 0.0, 1.0),
             max_contact_distance_m=0.045,
@@ -324,24 +326,25 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
             transfer_mode="transfer_to_waste",
         ),
     )
-    decon_waypoints = (
-        (0.54, -0.15, 0.790),
-        (0.68, -0.15, 0.790),
-        (0.82, -0.15, 0.790),
-        (0.82, 0.15, 0.790),
-        (0.68, 0.15, 0.790),
-        (0.54, 0.15, 0.790),
-    )
-    decon_report = franka.execute_decontamination(
-        decontaminator,
-        decon_waypoints,
-        dwell_frames=36,
-    )
+    decon_report = franka.execute_surface_decontamination(decontaminator, 1.5)
     captures["decontamination"] = _capture(
         app, args.artifact.parent / "frames", "02_decontamination", args.capture
     )
     if not decon_report.success:
         raise AssertionError(f"physical decontamination failed: {decon_report}")
+
+    return_route = (
+        (10.30, decon_base_y, 0.0),
+        (10.30, -1.50, 0.0),
+        (8.90, -1.50, 0.0),
+        (5.20, -1.50, 0.0),
+        (0.0, -1.25, 0.0),
+    )
+    return_report = franka.navigate_route(return_route, final_yaw_rad=0.0)
+    if not return_report.success:
+        raise AssertionError(
+            f"Ridgeback could not return from the decontamination room: {return_report}"
+        )
 
     panel.update(
         "Shield pick-and-place",

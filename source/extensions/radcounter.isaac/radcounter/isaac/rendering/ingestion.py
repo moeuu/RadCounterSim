@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
-import json
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
@@ -136,9 +135,7 @@ class DigitalTwinIngestor:
             authored.CreateFaceVertexIndicesAttr(mesh.triangles.reshape(-1).tolist())
             authored.CreateSubdivisionSchemeAttr("none")
             prim = authored.GetPrim()
-            prim.CreateAttribute("rad:material:id", Sdf.ValueTypeNames.String).Set(
-                mesh.material_id
-            )
+            prim.CreateAttribute("rad:material:id", Sdf.ValueTypeNames.String).Set(mesh.material_id)
             prim.CreateAttribute("rad:visual:normalizedFallback", Sdf.ValueTypeNames.Bool).Set(True)
             UsdGeom.Imageable(prim).CreatePurposeAttr("render")
         return IngestionReport(

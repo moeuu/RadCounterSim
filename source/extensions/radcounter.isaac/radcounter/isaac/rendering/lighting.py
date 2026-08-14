@@ -47,12 +47,12 @@ class FacilityLightingAuthor:
                 Gf.Vec3f(*item.color_rgb)
             )
             if item.color_temperature_k is not None:
-                prim.CreateAttribute(
-                    "inputs:enableColorTemperature", Sdf.ValueTypeNames.Bool
-                ).Set(True)
-                prim.CreateAttribute(
-                    "inputs:colorTemperature", Sdf.ValueTypeNames.Float
-                ).Set(item.color_temperature_k)
+                prim.CreateAttribute("inputs:enableColorTemperature", Sdf.ValueTypeNames.Bool).Set(
+                    True
+                )
+                prim.CreateAttribute("inputs:colorTemperature", Sdf.ValueTypeNames.Float).Set(
+                    item.color_temperature_k
+                )
             if item.light_type is LightType.RECT:
                 prim.CreateAttribute("inputs:width", Sdf.ValueTypeNames.Float).Set(item.width_m)
                 prim.CreateAttribute("inputs:height", Sdf.ValueTypeNames.Float).Set(item.height_m)
@@ -64,7 +64,9 @@ class FacilityLightingAuthor:
                 prim.CreateAttribute("inputs:texture:file", Sdf.ValueTypeNames.Asset).Set(
                     Sdf.AssetPath(item.hdri_uri)
                 )
-                prim.CreateAttribute("inputs:texture:format", Sdf.ValueTypeNames.Token).Set("latlong")
+                prim.CreateAttribute("inputs:texture:format", Sdf.ValueTypeNames.Token).Set(
+                    "latlong"
+                )
             xformable = UsdGeom.Xformable(prim)
             xformable.ClearXformOpOrder()
             xformable.AddTranslateOp().Set(Gf.Vec3d(*item.translation_m))

@@ -508,7 +508,10 @@ class IsaacPhysicsRobotController:
         placement_base_yaw_rad: float | None = None,
         pickup_base_route_m: Sequence[Sequence[float]] | None = None,
         placement_base_route_m: Sequence[Sequence[float]] | None = None,
+        target_root_position_m: Sequence[float] | None = None,
+        placement_settle_tolerance_m: float = 0.15,
     ) -> PhysicsActionReport:
+        del target_root_position_m, placement_settle_tolerance_m
         pickup_route = (
             (pickup_base_position_m,) if pickup_base_route_m is None else pickup_base_route_m
         )

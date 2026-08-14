@@ -111,3 +111,35 @@ def test_wetness_adds_blue_component_to_visualization() -> None:
     )
     after = process.visual_color_rgb()
     assert np.any(after[:, 2] > before[:, 2])
+
+
+def test_water_jet_treats_vertical_wall_surface() -> None:
+    grid = SurfaceSourceGrid(
+        cells_x=6,
+        cells_y=4,
+        size_x_m=1.2,
+        size_y_m=0.8,
+        center_world_m=(0.0, 1.0, 5.0),
+        activity_bq_per_cell=1000.0,
+        surface_u_world=(1.0, 0.0, 0.0),
+        surface_v_world=(0.0, 0.0, 1.0),
+    )
+    state = WaterDecontaminationState(10.0, 10.0)
+    process = WaterSurfaceDecontaminator(
+        grid,
+        state,
+        runoff_direction_world_xy=(0.0, -1.0),
+    )
+
+    step = process.apply(
+        _spec(),
+        nozzle_world_m=(0.0, 0.5, 5.0),
+        jet_direction_world=(0.0, 1.0, 0.0),
+        surface_speed_m_s=0.0,
+        dt_s=1.0,
+    )
+
+    assert step.blocked_reason is None
+    assert step.removed_activity_bq > 0.0
+    assert step.impact_world_m is not None
+    assert np.allclose(step.impact_world_m, (0.0, 1.0, 5.0))

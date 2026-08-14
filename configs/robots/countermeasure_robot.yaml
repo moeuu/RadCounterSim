@@ -1,16 +1,16 @@
 robot_id: countermeasure-robot-1
-reference_model_id: mhi-meister
-manufacturer: Mitsubishi Heavy Industries
-model: MEISTeR
-geometry_fidelity: reference_procedural
-source: https://www.mhi.com/business/products-services/energy-environment/nuclear-power-generation/robot-mechatronics/meister
-controller: mhi_meister_dual_arm_crawler
-asset: assets/robots/mhi_meister.xacro
+reference_model_id: clearpath-ridgeback-franka
+manufacturer: Clearpath Robotics / Franka Robotics
+model: Ridgeback + Franka Emika Panda
+geometry_fidelity: manufacturer_asset
+source: https://docs.isaacsim.omniverse.nvidia.com/latest/assets/usd_assets_robots.html
+controller: ridgeback_franka_lula_ik
+asset: /Isaac/Robots/Clearpath/RidgebackFranka/ridgeback_franka.usd
 articulation_root: /World/CountermeasureRobot
-base_dofs: 7
-arm_dofs: 14
-gripper_dofs: 4
-end_effector_frames: [left_tool0, right_tool0]
-decon_tool_path: /World/CountermeasureRobot/right_tool0
-maximum_payload_kg_per_arm: 15.0
-capabilities: [place_shield, move_object, remove_object, cut_obstacle, core_sample, suction_decontaminate, abrasive_blast_decontaminate]
+base_dofs: 3
+arm_dofs: 7
+gripper_dofs: 2
+end_effector_frames: [right_gripper, panda_hand]
+decon_tool_path: /World/CountermeasureRobot/panda_hand/RadCounterDeconTool/ContactPad
+maximum_payload_kg_per_arm: 3.0
+capabilities: [place_shield, move_shield, move_object, remove_object, contact_decontaminate]

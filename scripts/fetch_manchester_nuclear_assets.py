@@ -9,11 +9,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-from pathlib import Path
 import shutil
 import urllib.request
 import zipfile
-
+from pathlib import Path
 
 ARTICLE_API = "https://api.figshare.com/v2/articles/25224974"
 DEFAULT_FILE = "500L_Drum_Store.zip"

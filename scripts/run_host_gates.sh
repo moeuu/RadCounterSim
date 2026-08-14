@@ -20,11 +20,16 @@ uv run ruff check .
     physics_actions_gate.py \
     articulation_ik_gate.py \
     real_robot_gate.py \
+    articulated_object_gate.py \
     dashboard_gate.py \
     workflow_gate.py
   do
     uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked python "tests/isaac/$gate"
   done
+  uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked \
+    python scripts/run_gui_validation.py \
+    --headless --no-keep-open --phase-hold-s 0 \
+    --artifact artifacts/gui-validation/host-gate.json
 )
 
 (

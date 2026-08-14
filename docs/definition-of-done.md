@@ -14,15 +14,15 @@
 
 ## Host integrations
 
-- [ ] Isaac Sim runtime gate: load the extension in a supported Isaac Sim installation.
-- [ ] Embree runtime gate: build and execute native occlusion queries against Embree 4.
-- [ ] Physics runtime gate: execute shield placement and object motion in PhysX.
-- [ ] ROS 2 runtime gate: build the Jazzy workspace and pass message/action/service round trips.
+- [x] Isaac Sim runtime gate: load the extension in a supported Isaac Sim installation.
+- [x] Embree runtime gate: build and execute native occlusion queries against Embree 4.
+- [x] Physics runtime gate: execute shield placement and object motion in PhysX.
+- [x] ROS 2 runtime gate: build the Jazzy workspace and pass message/action/service round trips.
 - [ ] GPU runtime gate: record the target GPU and Isaac renderer versions in a release manifest.
 
-Isaac Sim 6.0.1, Embree 4.3, ROS 2 Jazzy, and the NVIDIA GPU are installed on this
-machine. The unchecked items remain unchecked until their real build or runtime test
-passes; installed files and static inspection alone are insufficient evidence.
+The first four host gates passed on the local Isaac Sim 6.0.1, Embree 4.3, and
+ROS 2 Jazzy host. The canonical release-manifest GPU/renderer record remains
+open; runtime reports alone do not satisfy that release-artifact requirement.
 
 Run the portable release checks with:
 
