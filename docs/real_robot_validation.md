@@ -57,6 +57,8 @@ uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked python scripts/run_gui.py
 
 The GUI audit is written to `artifacts/gui-validation/latest.json`. For a
 noninteractive run, append `--headless --no-keep-open --phase-hold-s 0`.
+The persistent visible GUI loop is capped at 60 FPS by default; pass
+`--max-fps 30` to lower it or `--max-fps 0` to disable the cap.
 
 The smaller decontamination/shield asset audit remains available with:
 

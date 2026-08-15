@@ -14,8 +14,10 @@ from radcounter.core.natural_language import (
 from radcounter.core.natural_language.client import _normalize_plan
 from scripts.run_gui_validation import (
     DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION,
+    DEFAULT_GUI_MAX_FPS,
     _arguments,
     _complex_process_audit,
+    _GuiFrameRateLimiter,
 )
 
 SURFACE = "/World/RemoteDeconFacility/DeconWorkSurface"
@@ -223,11 +225,49 @@ def test_complex_validation_cli_requires_visible_separate_mode() -> None:
     assert args.keep_open is False
     assert args.headless is False
     assert args.natural_language_timeout_s == 1800.0
+    assert args.max_fps == DEFAULT_GUI_MAX_FPS
 
     with pytest.raises(SystemExit):
         _arguments(["--complex-natural-language-validation", "--headless"])
     with pytest.raises(SystemExit):
         _arguments(["--complex-natural-language-validation", "--interactive"])
+
+
+def test_gui_fps_limit_is_configurable_and_rejects_negative_values() -> None:
+    assert _arguments(["--max-fps", "30"]).max_fps == 30.0
+    assert _arguments(["--max-fps", "0"]).max_fps == 0.0
+    with pytest.raises(SystemExit):
+        _arguments(["--max-fps", "-1"])
+    with pytest.raises(SystemExit):
+        _arguments(["--max-fps", "nan"])
+
+
+def test_gui_frame_limiter_accounts_for_update_time() -> None:
+    class FakeClock:
+        def __init__(self) -> None:
+            self.now = 0.0
+            self.sleeps: list[float] = []
+
+        def __call__(self) -> float:
+            return self.now
+
+        def sleep(self, duration_s: float) -> None:
+            self.sleeps.append(duration_s)
+            self.now += duration_s
+
+    clock = FakeClock()
+    limiter = _GuiFrameRateLimiter(50.0, clock=clock, sleeper=clock.sleep)
+    clock.now += 0.006
+    limiter.wait()
+    assert clock.sleeps == pytest.approx([0.014])
+
+    clock.now += 0.025
+    limiter.wait()
+    assert clock.sleeps == pytest.approx([0.014])
+
+    unlimited = _GuiFrameRateLimiter(0.0, clock=clock, sleeper=clock.sleep)
+    unlimited.wait()
+    assert clock.sleeps == pytest.approx([0.014])
 
 
 def test_default_instruction_requests_achievable_bounded_complex_process() -> None:

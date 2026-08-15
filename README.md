@@ -96,6 +96,9 @@ uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked python scripts/run_gui.py
 
 Use `--headless --no-keep-open --phase-hold-s 0` for a noninteractive gate. The
 complete public audit is written to `artifacts/gui-validation/latest.json`.
+The visible GUI is capped at 60 FPS by default to avoid consuming a full GPU
+while idle. Override it with `--max-fps 30`, or use `--max-fps 0` to remove the
+cap.
 
 ## Local natural-language application
 

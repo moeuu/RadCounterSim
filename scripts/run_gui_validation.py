@@ -7,10 +7,11 @@ import argparse
 import asyncio
 import importlib
 import json
+import math
 import sys
 import time
 import traceback
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, is_dataclass, replace
 from enum import Enum
 from pathlib import Path
@@ -38,6 +39,7 @@ DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION = (
     "ください。Protected測定地点へ移動して2秒測定し、測定ロボットを開始位置へ"
     "戻して、最後に現在の状態を表示してください。"
 )
+DEFAULT_GUI_MAX_FPS = 60.0
 
 
 class ComplexNaturalLanguageValidationError(RuntimeError):
@@ -84,6 +86,12 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--phase-hold-s", type=float, default=0.35)
     parser.add_argument("--frame-delay-s", type=float, default=0.0)
+    parser.add_argument(
+        "--max-fps",
+        type=float,
+        default=DEFAULT_GUI_MAX_FPS,
+        help="cap the open GUI refresh rate; use 0 to disable the limit",
+    )
     parser.add_argument("--decon-duration-s", type=float, default=1.5)
     parser.add_argument("--system-catalog", type=Path)
     parser.add_argument("--profile")
@@ -114,6 +122,8 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         )
     if arguments.natural_language_timeout_s <= 0.0:
         parser.error("--natural-language-timeout-s must be positive")
+    if not math.isfinite(arguments.max_fps) or arguments.max_fps < 0.0:
+        parser.error("--max-fps must be a finite non-negative number")
     return arguments
 
 
@@ -216,6 +226,30 @@ class _GuiStepper:
             self.world.step(render=render)
         if self.frame_delay_s:
             time.sleep(self.frame_delay_s)
+
+
+class _GuiFrameRateLimiter:
+    """Bound the persistent GUI loop without slowing validation physics."""
+
+    def __init__(
+        self,
+        max_fps: float,
+        *,
+        clock: Callable[[], float] = time.perf_counter,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
+        self._frame_period_s = 0.0 if max_fps == 0.0 else 1.0 / max_fps
+        self._clock = clock
+        self._sleeper = sleeper
+        self._previous_frame_s = clock()
+
+    def wait(self) -> None:
+        if self._frame_period_s == 0.0:
+            return
+        remaining_s = self._frame_period_s - (self._clock() - self._previous_frame_s)
+        if remaining_s > 0.0:
+            self._sleeper(remaining_s)
+        self._previous_frame_s = self._clock()
 
 
 class _ValidationPanel:
@@ -2308,10 +2342,12 @@ def main(argv: list[str] | None = None) -> int:
         panel.finish(False, args.artifact)
     try:
         if args.keep_open:
+            frame_limiter = _GuiFrameRateLimiter(args.max_fps)
             while app.is_running():
                 if dashboard is not None:
                     dashboard.process_pending_natural_language_actions()
                 app.update()
+                frame_limiter.wait()
     finally:
         if dashboard is not None:
             dashboard.shutdown()
