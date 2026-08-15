@@ -1,0 +1,118 @@
+schema_version: 1
+default_profile: vertical-slice
+
+environments:
+  vertical-slice:
+    display_name: RadCounterSim vertical slice
+    descriptor_uri: ../environments/vertical_slice_import.yaml
+    description: Canonical four-room decommissioning and validation environment.
+  fukushima-daiichi:
+    display_name: Fukushima Daiichi generic CAD model
+    descriptor_uri: ../environments/fukushima_daiichi_solidworks.yaml
+    description: >-
+      Qualot's CC BY 4.0 SolidWorks assembly converted directly to USD on Linux
+      and normalized for rendering, PhysX collision, and radiation transport.
+    setup_hint: >-
+      Run scripts/fetch_fukushima_daiichi_cad.py and then
+      scripts/convert_solidworks_to_usd.py. Isaac Sim's bundled Linux HOOPS
+      converter writes Building.usdc into the configured export directory.
+    preparation_scripts:
+      - ../../scripts/fetch_fukushima_daiichi_cad.py
+      - ../../scripts/convert_solidworks_to_usd.py
+  jsi-triga:
+    display_name: JSI TRIGA 2026 point-cloud environment
+    descriptor_uri: ../environments/jsi_triga_2026.yaml
+    description: Dataset-backed JSI TRIGA point-cloud environment.
+
+robot_sets:
+  articulated-decommissioning:
+    display_name: Ridgeback+Franka and Nova Carter
+    kind: decommissioning
+    description: Manufacturer assets and the full physical decommissioning workflow.
+  fukushima-response-reference:
+    display_name: PackBot and Elios 3 radiation survey team
+    kind: reference
+    description: Lightweight traceable reference geometry for rapid environment exploration.
+    reference_robots:
+      - robot_id: packbot
+        reference_model_id: irobot-packbot-fukushima
+        prim_path: /World/Robots/PackBot
+        translation_m: [2.0, -1.0, 0.0]
+        yaw_deg: 0.0
+      - robot_id: elios3
+        reference_model_id: flyability-elios3-rad
+        prim_path: /World/Robots/Elios3
+        translation_m: [2.0, 1.0, 1.5]
+        yaw_deg: 0.0
+  packbot-articulated:
+    display_name: Articulated Fukushima PackBot URDF
+    kind: fleet
+    fleet_uri: ../robots/fukushima_packbot_fleet.yaml
+    description: Isaac-imported URDF with named track, flipper, and mast joints.
+  no-robots:
+    display_name: Environment only
+    kind: none
+
+detector_sets:
+  vertical-slice-gamma:
+    display_name: Vertical-slice gamma counter
+    detectors:
+      - detector_id: gamma-counter
+        model_id: nai_tl
+        parent_prim_path: /World/MeasurementRobot/chassis_link/Detector
+  fukushima-survey:
+    display_name: PackBot GM survey meter and Elios coded-aperture imager
+    description: Two independently simulated gamma instruments mounted on reference robots.
+    detectors:
+      - detector_id: packbot-gm
+        model_id: gm_tube
+        parent_robot_id: packbot
+        parent_sensor_link: radiation
+        translation_m: [0.03, 0.16, 0.41]
+      - detector_id: elios-imager
+        model_id: coded_aperture_czt
+        parent_robot_id: elios3
+        parent_sensor_link: radiation
+        translation_m: [-0.105, 0.0, -0.115]
+  fixed-survey-station:
+    display_name: Fixed NaI survey station
+    detectors:
+      - detector_id: fixed-nai
+        model_id: nai_tl
+        parent_prim_path: /World
+        translation_m: [0.0, 0.0, 1.0]
+  no-detectors:
+    display_name: No radiation detector
+    detectors: []
+
+profiles:
+  vertical-slice:
+    display_name: Vertical-slice decommissioning
+    environment: vertical-slice
+    robot_set: articulated-decommissioning
+    detector_set: vertical-slice-gamma
+    runtime_config_uri: ../scenarios/vertical_slice.runtime.json
+    application_mode: decommissioning
+    description: Existing full articulated application and validation workflow.
+  fukushima-packbot:
+    display_name: Fukushima Daiichi PackBot survey
+    environment: fukushima-daiichi
+    robot_set: fukushima-response-reference
+    detector_set: fukushima-survey
+    runtime_config_uri: ../scenarios/vertical_slice.runtime.json
+    application_mode: configurable
+    description: Imported Fukushima CAD with quickly movable reference survey robots.
+  fukushima-environment-only:
+    display_name: Fukushima Daiichi environment inspection
+    environment: fukushima-daiichi
+    robot_set: no-robots
+    detector_set: fixed-survey-station
+    runtime_config_uri: ../scenarios/vertical_slice.runtime.json
+    application_mode: configurable
+  vertical-slice-packbot:
+    display_name: Vertical slice with PackBot/Elios survey team
+    environment: vertical-slice
+    robot_set: fukushima-response-reference
+    detector_set: fukushima-survey
+    runtime_config_uri: ../scenarios/vertical_slice.runtime.json
+    application_mode: configurable

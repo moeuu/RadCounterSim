@@ -34,7 +34,7 @@ if _extension_namespace not in _radcounter_package.__path__:
 DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION = (
     "不規則な壁面Cs-137面状線源を、初期活動量に対する残存率60%以下になるまで"
     "最大3回の範囲で全面蛇行除染してください。次に同じ主鉛遮蔽体LeadShieldを"
-    "線源から保護区域への35%位置へ配置し、その同じ遮蔽体を65%位置へ再配置して"
+    "線源から保護区域への25%位置へ配置し、その同じ遮蔽体を65%位置へ再配置して"
     "ください。Protected測定地点へ移動して2秒測定し、測定ロボットを開始位置へ"
     "戻して、最後に現在の状態を表示してください。"
 )
@@ -77,6 +77,12 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--phase-hold-s", type=float, default=0.35)
     parser.add_argument("--frame-delay-s", type=float, default=0.0)
     parser.add_argument("--decon-duration-s", type=float, default=1.5)
+    parser.add_argument("--system-catalog", type=Path)
+    parser.add_argument("--profile")
+    parser.add_argument("--environment")
+    parser.add_argument("--robot-set")
+    parser.add_argument("--detector-set")
+    parser.add_argument("--selection-file", type=Path)
     parser.add_argument(
         "--artifact",
         type=Path,
@@ -94,6 +100,32 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     if arguments.natural_language_timeout_s <= 0.0:
         parser.error("--natural-language-timeout-s must be positive")
     return arguments
+
+
+def _selected_system(args: argparse.Namespace):
+    from radcounter.core.system_profiles import (
+        load_active_selection,
+        resolve_system_selection,
+    )
+
+    explicit = any(
+        (
+            args.system_catalog,
+            args.profile,
+            args.environment,
+            args.robot_set,
+            args.detector_set,
+        )
+    )
+    if not explicit:
+        return load_active_selection(args.selection_file)
+    return resolve_system_selection(
+        catalog_path=args.system_catalog,
+        profile_id=args.profile,
+        environment_id=args.environment,
+        robot_set_id=args.robot_set,
+        detector_set_id=args.detector_set,
+    )
 
 
 def _jsonable(value: Any) -> Any:
@@ -900,7 +932,7 @@ def _complex_process_audit(
                 environment_before.get("surface_source", {}).get("map_activity_bq", 0.0)
             )
         ),
-        "same_primary_shield_placed_at_35_then_moved_to_65": (
+        "same_primary_shield_placed_at_25_then_moved_to_65": (
             bool(place_rows)
             and bool(move_rows)
             and _completed_action_result(place_rows[0][1])
@@ -911,7 +943,7 @@ def _complex_process_audit(
             and move_details.get("deployment_state") == "deployed"
             and bool(place_motion.get("success", False))
             and bool(move_motion.get("success", False))
-            and abs(float(place_details.get("placement_fraction", -1.0)) - 0.35) <= 1.0e-6
+            and abs(float(place_details.get("placement_fraction", -1.0)) - 0.25) <= 1.0e-6
             and abs(float(move_details.get("placement_fraction", -1.0)) - 0.65) <= 1.0e-6
             and shield_events[:2]
             and [event[2] for event in shield_events[:2]]
@@ -1178,18 +1210,119 @@ def _run_complex_natural_language_validation(
         dashboard.process_pending_natural_language_actions()
 
     panel.update(
-        "Local LLM interpretation, explicit confirmation, and physical execution",
+        "Local LLM interpretation before explicit confirmation",
         0,
         total_steps,
-        {"instruction": instruction, "confirm_physical": True},
+        {"instruction": instruction, "confirm_physical": False},
     )
+    plan_payload: dict[str, Any] = {}
+    plan_preflight: dict[str, Any] = {}
     try:
-        submission = _complete_with_updates(
+        interpreted = _complete_with_updates(
             app,
             dashboard.submit_natural_language_instruction(
                 instruction,
-                confirm_physical=True,
+                confirm_physical=False,
             ),
+            timeout_s=args.natural_language_timeout_s,
+        )
+        plan_payload = interpreted.validated.plan.model_dump(mode="json")
+        context_by_id = {
+            action.action_id: action for action in context_before.available_actions
+        }
+        planned_steps = list(interpreted.validated.plan.steps)
+        planned_actions = [
+            context_by_id.get(step.candidate_id or "") for step in planned_steps
+        ]
+        expected_commands = (
+            "execute_candidate",
+            "execute_candidate",
+            "execute_candidate",
+            "execute_candidate",
+            "measure",
+            "return_measurement_robot",
+            "show_status",
+        )
+        preflight_invariants = {
+            "seven_ordered_logical_steps": (
+                len(planned_steps) == len(expected_commands)
+                and tuple(_enum_tail(step.command) for step in planned_steps)
+                == expected_commands
+            ),
+            "bounded_decontamination_is_first": (
+                len(planned_actions) >= 1
+                and planned_actions[0] is not None
+                and planned_actions[0].action_type == "decontaminate"
+                and planned_steps[0].max_attempts == 3
+                and planned_steps[0].until is not None
+                and _enum_tail(planned_steps[0].until.criterion)
+                == "decontamination_remaining_fraction_at_most"
+                and abs(planned_steps[0].until.threshold - 0.60) <= 1.0e-6
+            ),
+            "primary_shield_has_feasible_25_then_65_slots": (
+                len(planned_actions) >= 3
+                and all(action is not None for action in planned_actions[1:3])
+                and all(action.feasible for action in planned_actions[1:3] if action)
+                and all(
+                    action.target == "/World/LeadShield"
+                    for action in planned_actions[1:3]
+                    if action
+                )
+                and [
+                    round(float(action.placement_fraction or -1.0), 6)
+                    for action in planned_actions[1:3]
+                    if action is not None
+                ]
+                == [0.25, 0.65]
+            ),
+            "protected_navigation_is_fourth": (
+                len(planned_actions) >= 4
+                and planned_actions[3] is not None
+                and planned_actions[3].action_type == "measure"
+                and planned_actions[3].target
+                == "/World/DetectorStations/Protected"
+            ),
+            "physical_plan_is_waiting_for_confirmation": (
+                interpreted.validated.requires_confirmation
+                and not interpreted.executed
+            ),
+        }
+        plan_preflight = {
+            "invariants": preflight_invariants,
+            "failed_invariants": [
+                name for name, passed in preflight_invariants.items() if not passed
+            ],
+            "shield_candidates": [
+                {
+                    **action.model_dump(mode="json"),
+                    "feasibility_facts": _jsonable(
+                        getattr(
+                            getattr(dashboard, "_command_candidates", {}).get(
+                                action.action_id
+                            ),
+                            "feasibility",
+                            None,
+                        )
+                    ),
+                }
+                for action in context_before.available_actions
+                if action.action_type in {"place_shield", "move_shield"}
+            ],
+        }
+        if plan_preflight["failed_invariants"]:
+            raise RuntimeError(
+                "natural-language plan preflight failed: "
+                f"{plan_preflight['failed_invariants']}"
+            )
+        panel.update(
+            "Plan verified; executing explicit confirmation through the physical queue",
+            0,
+            total_steps,
+            {"plan": plan_payload, "plan_preflight": plan_preflight},
+        )
+        submission = _complete_with_updates(
+            app,
+            dashboard.confirm_natural_language_instruction(),
             before_update=process_physical_queue,
             timeout_s=args.natural_language_timeout_s,
         )
@@ -1212,7 +1345,7 @@ def _run_complex_natural_language_validation(
         )
         local_llm = _local_llm_audit(dashboard)
         partial_audit = _complex_process_audit(
-            {},
+            plan_payload,
             partial_results,
             environment_before,
             environment_after,
@@ -1227,6 +1360,7 @@ def _run_complex_natural_language_validation(
             "error": f"{type(error).__name__}: {error}",
             "local_llm": local_llm,
             "confirmation_requested": True,
+            "plan_preflight": plan_preflight,
             "physical_queue_dispatches": physical_queue_dispatches,
             "partial_results": _jsonable(partial_results),
             "environment_before": environment_before,
@@ -1325,6 +1459,7 @@ def _run_complex_natural_language_validation(
             "executed": submission.executed,
             "results": _jsonable(results),
         },
+        "plan_preflight": plan_preflight,
         "local_llm": local_llm,
         "physical_queue_dispatches": physical_queue_dispatches,
         "public_context_before": context_payload,
@@ -1360,12 +1495,80 @@ def _run_complex_natural_language_validation(
     return payload
 
 
+def _run_configurable_system(
+    app: Any,
+    args: argparse.Namespace,
+    panel: _ValidationPanel,
+    dashboard: Any,
+    selection: Any,
+) -> dict[str, object]:
+    """Load a catalog selection without assuming the vertical-slice task layout."""
+
+    import omni.usd
+    from radcounter.isaac.runtime import IsaacRadiationSimulation
+    from radcounter.isaac.system_profile import (
+        compose_selected_system,
+        prepare_environment_stage,
+    )
+
+    panel.update(
+        "Preparing selected environment",
+        0,
+        3,
+        selection.as_dict(),
+    )
+    stage_path, environment_manifest = prepare_environment_stage(selection)
+    context = omni.usd.get_context()
+    if not context.open_stage(str(stage_path)):
+        raise RuntimeError(f"failed to open selected environment stage: {stage_path}")
+    for _ in range(30):
+        app.update()
+    stage = context.get_stage()
+    panel.update("Composing selected robots and detectors", 1, 3, selection.as_dict())
+    composed = compose_selected_system(stage, selection, stage_path=stage_path)
+    for _ in range(30):
+        app.update()
+    simulation = IsaacRadiationSimulation.from_config(stage, composed.runtime_config_path)
+    dashboard.configure_system_paths(
+        stage_path=composed.stage_path,
+        config_path=composed.runtime_config_path,
+        display_name=selection.profile.display_name,
+        simulation=simulation,
+        selection=selection,
+    )
+    panel.update("Selected system is ready", 3, 3, composed.profile_manifest)
+    if args.interactive:
+        panel.hide()
+    return {
+        "success": True,
+        "mode": "configurable",
+        "selection": selection.as_dict(),
+        "stage": str(composed.stage_path),
+        "environment_manifest": str(environment_manifest),
+        "runtime_config": str(composed.runtime_config_path),
+        "robot_paths": composed.robot_paths,
+        "detector_paths": composed.detector_paths,
+        "disabled_detector_paths": list(composed.disabled_detector_paths),
+        "rebased_asset_paths": composed.rebased_asset_paths,
+        "source_count": len(simulation.sources),
+        "detector_count": len(simulation.detectors),
+        "note": (
+            "The configurable session composes selected assets without adding the "
+            "vertical-slice-only decontamination task layout."
+        ),
+    }
+
+
 def _run_validation(
     app: Any,
     args: argparse.Namespace,
     panel: _ValidationPanel,
     dashboard: Any,
 ) -> dict:
+    selection = _selected_system(args)
+    if selection.configurable:
+        return _run_configurable_system(app, args, panel, dashboard, selection)
+
     import omni.usd
     from isaacsim.core.api import World
     from isaacsim.core.prims import SingleArticulation

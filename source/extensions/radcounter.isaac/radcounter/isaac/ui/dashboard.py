@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import math
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,14 @@ from radcounter.core.natural_language import (
     CommandName,
     CommandStep,
     normalize_operator_instruction,
+)
+from radcounter.core.system_profiles import (
+    default_catalog_path,
+    default_selection_path,
+    load_active_selection,
+    load_system_catalog,
+    resolve_system_selection,
+    save_active_selection,
 )
 
 from ..runtime.simulation import IsaacRadiationSimulation, measurement_payload
@@ -47,6 +56,8 @@ class RadCounterDashboard:
         self.root = Path(__file__).resolve().parents[6]
         self.stage_path = self.root / "assets/environments/radcounter_vertical_slice.usda"
         self.config_path = self.root / "configs/scenarios/vertical_slice.runtime.json"
+        self._system_display_name = "vertical slice"
+        self._compose_default_scene = True
         self.artifact_path = self.root / "artifacts/ui/latest_measurement.json"
         self.workflow_artifact_path = self.root / "artifacts/ui/latest_workflow.json"
         self._label_subscriptions: list[Any] = []
@@ -63,6 +74,25 @@ class RadCounterDashboard:
         self._estimate = ui.SimpleStringModel("No estimator result supplied")
         self._residual = ui.SimpleStringModel("No verification residual supplied")
         self._plan = ui.SimpleStringModel("No countermeasure plan supplied")
+        self._selection_file = default_selection_path()
+        try:
+            self._active_system_selection = load_active_selection(self._selection_file)
+            self._system_catalog_path = self._active_system_selection.catalog_path
+        except Exception:
+            self._system_catalog_path = default_catalog_path()
+            self._active_system_selection = resolve_system_selection(
+                catalog_path=self._system_catalog_path
+            )
+        self._system_catalog_path, self._system_catalog = load_system_catalog(
+            self._system_catalog_path
+        )
+        self._profile_ids = tuple(self._system_catalog.profiles)
+        self._environment_ids = tuple(self._system_catalog.environments)
+        self._robot_set_ids = tuple(self._system_catalog.robot_sets)
+        self._detector_set_ids = tuple(self._system_catalog.detector_sets)
+        self._system_summary = ui.SimpleStringModel("")
+        self._system_controls: list[Any] = []
+        self._updating_system_controls = False
         self._command_input = ui.SimpleStringModel("")
         self._command_status = ui.SimpleStringModel(
             "Local command model starts when the first instruction is submitted."
@@ -86,7 +116,7 @@ class RadCounterDashboard:
         )
         self._window = ui.Window(
             "RadCounterSim Operations",
-            width=460,
+            width=540,
             height=1000,
             dockPreference=ui.DockPreference.RIGHT,
         )
@@ -107,18 +137,20 @@ class RadCounterDashboard:
                 style={"font_size": 12, "color": 0xFF9FA6AD},
             )
             ui.Separator(height=4)
+            self._build_system_selector()
+            ui.Separator(height=4)
             ui.Label(
-                "NATURAL LANGUAGE COMMAND",
+                "NATURAL LANGUAGE COMMAND / ROBOT LLM",
                 style={"font_size": 11, "color": 0xFFE3B341},
             )
             ui.Label(
-                "日本語またはEnglishで、実行したい動作を指示してください。",
+                "ロボット作業を日本語またはEnglishで指示してください。構成変更は上の選択欄で行います。",
                 word_wrap=True,
                 style=self._operator_style(font_size=12, color=0xFFB8BDC3),
             )
             ui.StringField(
                 self._command_input,
-                height=34,
+                height=46,
                 style=self._operator_style(font_size=14),
             )
             with ui.HStack(height=34, spacing=8):
@@ -161,8 +193,9 @@ class RadCounterDashboard:
             )
             ui.Separator(height=4)
             with ui.HStack(height=34, spacing=8):
-                ui.Button(
-                    "Load vertical slice", clicked_fn=lambda: self._schedule(self._load_scene())
+                self._load_scene_button = ui.Button(
+                    "Load vertical slice",
+                    clicked_fn=lambda: self._schedule(self._load_scene()),
                 )
                 ui.Button("Play / Pause", clicked_fn=self._toggle_timeline)
             with ui.HStack(height=34, spacing=8):
@@ -247,6 +280,307 @@ class RadCounterDashboard:
                 style={"font_size": 11, "color": 0xFFDD7A6B},
             )
 
+    @staticmethod
+    def _choice_index(values: tuple[str, ...], selected: str) -> int:
+        try:
+            return values.index(selected)
+        except ValueError:
+            return 0
+
+    @staticmethod
+    def _combo_index(combo: Any) -> int:
+        value_model = combo.model.get_item_value_model()
+        getter = getattr(value_model, "get_value_as_int", None)
+        return int(getter() if getter is not None else value_model.as_int)
+
+    @staticmethod
+    def _set_combo_index(combo: Any, values: tuple[str, ...], selected: str) -> None:
+        value_model = combo.model.get_item_value_model()
+        value_model.set_value(RadCounterDashboard._choice_index(values, selected))
+
+    @staticmethod
+    def _choice_labels(entries: Mapping[str, Any]) -> tuple[str, ...]:
+        return tuple(entry.display_name for entry in entries.values())
+
+    def _build_system_selector(self) -> None:
+        selection = self._active_system_selection
+        ui.Label(
+            "SYSTEM CONFIGURATION / 構成",
+            style={"font_size": 11, "color": 0xFF6CB6FF},
+        )
+        ui.Label(
+            "プリセットを選ぶか、環境・ロボット・検出器を個別に組み合わせます。",
+            word_wrap=True,
+            style=self._operator_style(font_size=12, color=0xFFB8BDC3),
+        )
+        rows = (
+            (
+                "Preset",
+                self._profile_ids,
+                self._system_catalog.profiles,
+                selection.profile_id,
+                "_profile_combo",
+            ),
+            (
+                "Environment",
+                self._environment_ids,
+                self._system_catalog.environments,
+                selection.environment_id,
+                "_environment_combo",
+            ),
+            (
+                "Robot",
+                self._robot_set_ids,
+                self._system_catalog.robot_sets,
+                selection.robot_set_id,
+                "_robot_set_combo",
+            ),
+            (
+                "Detector",
+                self._detector_set_ids,
+                self._system_catalog.detector_sets,
+                selection.detector_set_id,
+                "_detector_set_combo",
+            ),
+        )
+        for label, values, entries, selected, attribute in rows:
+            with ui.HStack(height=28, spacing=8):
+                ui.Label(label, width=92)
+                combo = ui.ComboBox(
+                    self._choice_index(values, selected),
+                    *self._choice_labels(entries),
+                )
+            setattr(self, attribute, combo)
+            self._system_controls.append(combo)
+        self._profile_combo.model.add_item_changed_fn(self._on_profile_choice_changed)
+        for combo in (
+            self._environment_combo,
+            self._robot_set_combo,
+            self._detector_set_combo,
+        ):
+            combo.model.add_item_changed_fn(self._on_component_choice_changed)
+        with ui.HStack(height=34, spacing=8):
+            self._system_apply_button = ui.Button(
+                "選択した構成を適用 / Apply",
+                clicked_fn=self._apply_system_selection,
+                style=self._operator_style(
+                    font_size=12,
+                    background_color=0xFF4F86C6,
+                    color=0xFFF6F8FA,
+                ),
+            )
+            ui.Button("現在値に戻す", width=110, clicked_fn=self._restore_system_selection)
+        _bound_label(
+            self._system_summary,
+            self._label_subscriptions,
+            word_wrap=True,
+            height=48,
+            style=self._operator_style(font_size=11, color=0xFFD3D7DC),
+        )
+        self._update_system_preview()
+
+    def _selected_system_ids(self) -> tuple[str, str, str, str]:
+        return (
+            self._profile_ids[self._combo_index(self._profile_combo)],
+            self._environment_ids[self._combo_index(self._environment_combo)],
+            self._robot_set_ids[self._combo_index(self._robot_set_combo)],
+            self._detector_set_ids[self._combo_index(self._detector_set_combo)],
+        )
+
+    def _resolve_system_draft(self) -> Any:
+        profile, environment, robot_set, detector_set = self._selected_system_ids()
+        return resolve_system_selection(
+            catalog_path=self._system_catalog_path,
+            profile_id=profile,
+            environment_id=environment,
+            robot_set_id=robot_set,
+            detector_set_id=detector_set,
+        )
+
+    def _update_system_preview(self) -> None:
+        try:
+            selection = self._resolve_system_draft()
+        except Exception as exc:
+            self._system_summary.set_value(f"組み合わせを変更してください: {exc}")
+            if hasattr(self, "_system_apply_button"):
+                self._system_apply_button.enabled = False
+            return
+        readiness = "準備済み" if selection.environment_ready else "環境データ未準備"
+        self._system_summary.set_value(
+            f"{selection.environment_entry.display_name} · "
+            f"{selection.robot_set.display_name} · {selection.detector_set.display_name}\n"
+            f"{readiness}"
+        )
+        if hasattr(self, "_system_apply_button"):
+            can_prepare = bool(selection.environment_preparation_scripts)
+            self._system_apply_button.enabled = selection.environment_ready or can_prepare
+            self._system_apply_button.text = (
+                "選択した構成を適用 / Apply"
+                if selection.environment_ready
+                else "環境を準備して適用 / Prepare"
+            )
+
+    def _on_profile_choice_changed(self, *_args: Any) -> None:
+        if self._updating_system_controls:
+            return
+        profile_id = self._profile_ids[self._combo_index(self._profile_combo)]
+        profile = self._system_catalog.profiles[profile_id]
+        self._updating_system_controls = True
+        try:
+            self._set_combo_index(
+                self._environment_combo, self._environment_ids, profile.environment
+            )
+            self._set_combo_index(
+                self._robot_set_combo, self._robot_set_ids, profile.robot_set
+            )
+            self._set_combo_index(
+                self._detector_set_combo, self._detector_set_ids, profile.detector_set
+            )
+        finally:
+            self._updating_system_controls = False
+        self._update_system_preview()
+
+    def _on_component_choice_changed(self, *_args: Any) -> None:
+        if not self._updating_system_controls:
+            self._update_system_preview()
+
+    def _sync_system_controls(self, selection: Any) -> None:
+        self._updating_system_controls = True
+        try:
+            self._set_combo_index(self._profile_combo, self._profile_ids, selection.profile_id)
+            self._set_combo_index(
+                self._environment_combo, self._environment_ids, selection.environment_id
+            )
+            self._set_combo_index(
+                self._robot_set_combo, self._robot_set_ids, selection.robot_set_id
+            )
+            self._set_combo_index(
+                self._detector_set_combo, self._detector_set_ids, selection.detector_set_id
+            )
+        finally:
+            self._updating_system_controls = False
+        self._active_system_selection = selection
+        self._update_system_preview()
+
+    def _restore_system_selection(self) -> None:
+        self._sync_system_controls(self._active_system_selection)
+
+    def _set_system_controls_enabled(self, enabled: bool) -> None:
+        for control in self._system_controls:
+            control.enabled = enabled
+        self._system_apply_button.enabled = enabled
+
+    def _apply_system_selection(self) -> None:
+        self._schedule(self._apply_system_selection_async())
+
+    async def _prepare_selected_environment(self, selection: Any) -> Any:
+        scripts = selection.environment_preparation_scripts
+        if not scripts:
+            raise FileNotFoundError(
+                selection.environment_entry.setup_hint or "環境データがありません"
+            )
+        project_python = self.root / ".venv/bin/python"
+        python = project_python if project_python.is_file() else Path(sys.executable)
+        for index, script in enumerate(scripts, start=1):
+            if script.suffix != ".py" or self.root not in script.parents or not script.is_file():
+                raise ValueError(f"許可されていない環境準備スクリプトです: {script}")
+            self._status.set_value(
+                f"環境を準備中です ({index}/{len(scripts)}): {script.stem}"
+            )
+            process = await asyncio.create_subprocess_exec(
+                str(python),
+                str(script),
+                cwd=str(self.root),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+            stdout, _ = await asyncio.wait_for(process.communicate(), timeout=900.0)
+            if process.returncode != 0:
+                detail = stdout.decode(errors="replace")[-3000:]
+                raise RuntimeError(f"{script.name} failed:\n{detail}")
+        prepared = self._resolve_system_draft()
+        if not prepared.environment_ready:
+            raise FileNotFoundError(
+                f"環境準備後もデータが見つかりません: {prepared.environment_source_path}"
+            )
+        return prepared
+
+    async def _apply_system_selection_async(self) -> None:
+        try:
+            selection = self._resolve_system_draft()
+        except Exception as exc:
+            self._status.set_value(f"構成を適用できません: {type(exc).__name__}: {exc}")
+            self._update_system_preview()
+            return
+        self._set_system_controls_enabled(False)
+        self._natural_language.cancel()
+        omni.timeline.get_timeline_interface().pause()
+        self._status.set_value(f"{selection.profile.display_name} を構成中です…")
+        try:
+            if not selection.environment_ready:
+                selection = await self._prepare_selected_environment(selection)
+            if selection.configurable:
+                from ..system_profile import (
+                    compose_selected_system,
+                    prepare_environment_stage,
+                )
+
+                stage_path, _ = prepare_environment_stage(selection)
+                context = omni.usd.get_context()
+                result, error = await context.open_stage_async(str(stage_path))
+                if not result:
+                    raise RuntimeError(f"stage load failed: {error}")
+                composed = compose_selected_system(
+                    context.get_stage(), selection, stage_path=stage_path
+                )
+                simulation = IsaacRadiationSimulation.from_config(
+                    context.get_stage(), composed.runtime_config_path
+                )
+                self.configure_system_paths(
+                    stage_path=composed.stage_path,
+                    config_path=composed.runtime_config_path,
+                    display_name=selection.profile.display_name,
+                    simulation=simulation,
+                    selection=selection,
+                )
+                self._sources.set_value(
+                    f"Estimator-visible sources: {len(simulation.belief_source_paths)}"
+                )
+                self._revisions.set_value(
+                    f"Embree geometries: {len(simulation.transport.geometry_paths)}"
+                )
+            else:
+                source = selection.environment_source_path
+                if source is None:
+                    raise RuntimeError("default environment must be a local USD stage")
+                self.stage_path = source
+                self.config_path = selection.runtime_config_path
+                self._system_display_name = selection.profile.display_name
+                self._compose_default_scene = True
+                self._load_scene_button.text = f"Reload {selection.profile.display_name}"
+                await self._load_scene()
+                self._initialize_runtime()
+                if self.simulation is None:
+                    raise RuntimeError("radiation runtime did not initialize")
+
+            save_active_selection(
+                self._selection_file,
+                catalog_path=selection.catalog_path,
+                profile_id=selection.profile_id,
+                environment_id=selection.environment_id,
+                robot_set_id=selection.robot_set_id,
+                detector_set_id=selection.detector_set_id,
+            )
+            self._sync_system_controls(selection)
+            self._status.set_value(f"構成を適用しました: {selection.profile.display_name}")
+        except Exception as exc:
+            self._status.set_value(
+                f"構成の適用に失敗しました: {type(exc).__name__}: {exc}"
+            )
+        finally:
+            self._set_system_controls_enabled(True)
+            self._update_system_preview()
+
     def _schedule(self, coroutine) -> None:
         task = asyncio.ensure_future(coroutine)
         self._tasks.add(task)
@@ -257,6 +591,30 @@ class RadCounterDashboard:
         if busy:
             self._command_confirm_button.enabled = False
             self._command_cancel_button.enabled = False
+
+    def configure_system_paths(
+        self,
+        *,
+        stage_path: str | Path,
+        config_path: str | Path,
+        display_name: str,
+        simulation: IsaacRadiationSimulation | None = None,
+        selection: Any | None = None,
+    ) -> None:
+        """Bind the dashboard reload action to a generated system-profile stage."""
+
+        self.stage_path = Path(stage_path).expanduser().resolve()
+        self.config_path = Path(config_path).expanduser().resolve()
+        self._system_display_name = display_name
+        self._compose_default_scene = False
+        self.simulation = simulation
+        self._workflow_services = None
+        self._workflow_belief = None
+        self._command_candidates.clear()
+        self._load_scene_button.text = f"Reload {display_name}"
+        self._status.set_value(f"Loaded {display_name}.")
+        if selection is not None:
+            self._sync_system_controls(selection)
 
     @staticmethod
     def _format_command_plan(submission) -> str:
@@ -450,12 +808,33 @@ class RadCounterDashboard:
             submission = await self._natural_language.confirm()
         return submission
 
+    async def confirm_natural_language_instruction(self):
+        """Confirm a previously interpreted plan through the dashboard controller."""
+
+        return await self._natural_language.confirm()
+
     async def _load_scene(self) -> None:
-        self._status.set_value("Loading USD stage and articulated robot assets...")
+        self._status.set_value(f"Loading {self._system_display_name}...")
         context = omni.usd.get_context()
         result, error = await context.open_stage_async(str(self.stage_path))
         if not result:
             self._status.set_value(f"Stage load failed: {error}")
+            return
+        if not self._compose_default_scene:
+            self._workflow_services = None
+            self._workflow_belief = None
+            self._command_candidates.clear()
+            try:
+                self.simulation = IsaacRadiationSimulation.from_config(
+                    context.get_stage(), self.config_path
+                )
+            except Exception as exc:
+                self.simulation = None
+                self._status.set_value(
+                    f"Profile reload failed: {type(exc).__name__}: {exc}"
+                )
+                return
+            self._status.set_value(f"Reloaded {self._system_display_name}.")
             return
         try:
             from omni.kit.app import get_app

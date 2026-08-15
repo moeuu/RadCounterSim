@@ -1,0 +1,35 @@
+schema_version: "1.0"
+environment:
+  environment_id: fukushima-daiichi-generic-cad
+  uri: ../../.cache/external/fukushima_daiichi_solidworks/export/Building.usdc
+  format: usd
+  coordinate_system:
+    units: auto
+    up_axis: +Z
+    forward_axis: +X
+    handedness: right
+  scale: 1.0
+  translation_world_m: [0.0, 0.0, 0.0]
+  rotation_world_rpy_deg: [0.0, 0.0, 0.0]
+  default_material_id: steel
+  material_rules:
+    - pattern: "*Building*"
+      material_id: concrete
+    - pattern: "*Structure*"
+      material_id: steel
+    - pattern: "*PCV*"
+      material_id: steel
+    - pattern: "*RPV*"
+      material_id: steel
+    - pattern: "*Pedestal*"
+      material_id: concrete
+  collision:
+    enabled: true
+    geometry_source: auto
+    approximation: triangle_mesh
+    show_collision_geometry: false
+  max_triangles: 8000000
+  cad_mesh_size_m: 0.10
+  cache_directory: ~/.cache/radcountersim/environments
+  streaming:
+    enabled: false

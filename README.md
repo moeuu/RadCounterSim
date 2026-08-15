@@ -38,6 +38,22 @@ and shared by rendering, PhysX collision, and Embree attenuation. Proprietary
 formats can use a no-shell external converter or an importer plugin. See
 `docs/environment-import.md`; CAD tessellation uses the `cad` uv group.
 
+Complete runtime compositions are selected independently from a system catalog:
+
+```bash
+uv run radcounter-system list
+uv run radcounter-system activate --profile fukushima-packbot
+radcounter-app
+uv run radcounter-system activate --profile vertical-slice
+```
+
+The Operations window exposes the same catalog as ordinary preset,
+environment, robot, and detector selectors, so no command or file path is
+required for normal switching. The LLM instruction area remains a separate
+robot-task control. The Fukushima Daiichi profile fetches the pinned CC BY 4.0
+SolidWorks source and converts it directly to USD on Linux with Isaac Sim's
+bundled HOOPS converter; see `docs/system-profiles.md`.
+
 The experiment command writes the required manifest, resolved configuration,
 JSONL events, Parquet tables, metrics, NPZ maps, snapshots directory, and HTML
 report under `outputs/<scenario>/<timestamp>_<run_id>/`.

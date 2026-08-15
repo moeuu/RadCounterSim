@@ -30,6 +30,7 @@ radcounter-import-environment = "radcounter.core.environment.cli:main"
 radcounter-build-large-environment = "radcounter.core.environment.large_cli:main"
 radcounter-robot-command = "radcounter.core.robots.command_io:command_main"
 radcounter-app = "radcounter.launcher:main"
+radcounter-system = "radcounter.core.system_cli:main"
 
 [dependency-groups]
 dev = [
