@@ -8,7 +8,7 @@ import os
 import tempfile
 from collections.abc import Callable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +71,23 @@ class _ExecutionReport:
     success: bool
     message: str
     public_details: Mapping[str, object]
+
+
+def _motion_audit(report: object) -> Mapping[str, object]:
+    if is_dataclass(report):
+        return asdict(report)
+    return {
+        name: getattr(report, name)
+        for name in (
+            "state",
+            "steps",
+            "message",
+            "phases",
+            "grasp_distance_m",
+            "placement_error_m",
+        )
+        if hasattr(report, name)
+    }
 
 
 EstimatorCallback = Callable[[tuple[PublicMeasurement, ...], BeliefState | None], BeliefState]
@@ -201,17 +218,71 @@ class IsaacWorkflowServices:
         )
         return self.last_prediction
 
+    def _collateral_positions(
+        self, excluded_object_path: str | None = None
+    ) -> dict[str, np.ndarray]:
+        """Snapshot non-target movable props for post-motion safety auditing."""
+
+        positions: dict[str, np.ndarray] = {}
+        stage = getattr(self.controller, "stage", None)
+        if stage is None:
+            return positions
+        for prim in stage.Traverse():
+            path = str(prim.GetPath())
+            if excluded_object_path and (
+                path == excluded_object_path
+                or path.startswith(excluded_object_path.rstrip("/") + "/")
+            ):
+                continue
+            movable = prim.GetAttribute("rad:manipulation:movable")
+            if not movable or not movable.HasAuthoredValueOpinion() or not bool(movable.Get()):
+                continue
+            positions[path] = self.candidate_generator.probe.world_position(prim)
+        return positions
+
+    def _collateral_motion_audit(
+        self,
+        before: Mapping[str, np.ndarray],
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        audit: list[dict[str, object]] = []
+        violations: list[dict[str, object]] = []
+        for path, initial in before.items():
+            final = self.candidate_generator.probe.world_position(path)
+            displacement = float(np.linalg.norm(final - initial))
+            row: dict[str, object] = {
+                "object_path": path,
+                "displacement_m": displacement,
+            }
+            audit.append(row)
+            if displacement > 0.05:
+                violations.append(row)
+        return audit, violations
+
     def _pick_and_place(self, action: CountermeasureAction) -> _ExecutionReport:
         if self.controller is None:
             return _ExecutionReport(False, "countermeasure controller is not configured", {})
         parameters = action.parameters
         object_path = str(parameters.get("object_path", action.target_prim_path or ""))
+        collateral_before = self._collateral_positions(object_path)
         pickup = np.asarray(parameters["pickup_base_position_m"], dtype=np.float64)
         placement = np.asarray(parameters["placement_base_position_m"], dtype=np.float64)
         pickup_yaw = parameters.get("pickup_base_yaw_rad")
         placement_yaw = parameters.get("placement_base_yaw_rad")
         pickup_route = parameters.get("pickup_base_route_m")
         placement_route = parameters.get("placement_base_route_m")
+        plan_audit = {
+            "pickup_base_position_m": pickup.tolist(),
+            "placement_base_position_m": placement.tolist(),
+            "pickup_base_route_m": pickup_route,
+            "placement_base_route_m": placement_route,
+            "pickup_base_yaw_rad": pickup_yaw,
+            "placement_base_yaw_rad": placement_yaw,
+            "target_root_position_m": (
+                None
+                if action.target_pose_world is None
+                else action.target_pose_world[:3, 3].tolist()
+            ),
+        }
         report = self.controller.execute_pick_and_place(
             object_path,
             pickup,
@@ -220,18 +291,83 @@ class IsaacWorkflowServices:
             placement_base_yaw_rad=(None if placement_yaw is None else float(placement_yaw)),
             pickup_base_route_m=pickup_route,
             placement_base_route_m=placement_route,
+            target_root_position_m=(
+                None
+                if action.target_pose_world is None
+                else action.target_pose_world[:3, 3]
+            ),
+            placement_settle_tolerance_m=float(
+                parameters.get("placement_settle_tolerance_m", 0.15)
+            ),
         )
-        if not report.success:
-            return _ExecutionReport(False, report.message, {"steps": report.steps})
-        if action.action_type == ActionType.REMOVE_OBJECT:
+        released_into_disposal = (
+            action.action_type == ActionType.REMOVE_OBJECT
+            and "release" in tuple(getattr(report, "phases", ()))
+        )
+        if action.action_type == ActionType.REMOVE_OBJECT and (
+            report.success or released_into_disposal
+        ):
             disposal = self.controller.remove_to_disposal_zone(
                 object_path,
                 str(parameters["disposal_zone_path"]),
             )
-            if not disposal.success:
+            if disposal.success:
                 return _ExecutionReport(
-                    False, disposal.message, {"steps": report.steps + disposal.steps}
+                    True,
+                    disposal.message,
+                    {
+                        "object_path": object_path,
+                        "steps": report.steps + disposal.steps,
+                        "motion_audit": _motion_audit(report),
+                        "disposal_audit": _motion_audit(disposal),
+                    },
                 )
+            if report.success:
+                return _ExecutionReport(
+                    False,
+                    disposal.message,
+                    {
+                        "steps": report.steps + disposal.steps,
+                        "motion_audit": _motion_audit(report),
+                        "disposal_audit": _motion_audit(disposal),
+                    },
+                )
+        if not report.success:
+            collateral_audit, collateral_violations = self._collateral_motion_audit(
+                collateral_before
+            )
+            message = report.message
+            if collateral_violations:
+                paths = ", ".join(
+                    str(row["object_path"]) for row in collateral_violations
+                )
+                message = f"{message}; unintended object motion detected: {paths}"
+            return _ExecutionReport(
+                False,
+                message,
+                {
+                    "steps": report.steps,
+                    "motion_audit": _motion_audit(report),
+                    "collateral_motion_audit": collateral_audit,
+                    "plan_audit": plan_audit,
+                },
+            )
+        collateral_audit, collateral_violations = self._collateral_motion_audit(
+            collateral_before
+        )
+        if collateral_violations:
+            paths = ", ".join(str(row["object_path"]) for row in collateral_violations)
+            return _ExecutionReport(
+                False,
+                f"unintended object motion detected: {paths}",
+                {
+                    "object_path": object_path,
+                    "steps": report.steps,
+                    "motion_audit": _motion_audit(report),
+                    "collateral_motion_audit": collateral_audit,
+                    "plan_audit": plan_audit,
+                },
+            )
         return _ExecutionReport(
             True,
             report.message,
@@ -239,6 +375,9 @@ class IsaacWorkflowServices:
                 "object_path": object_path,
                 "steps": report.steps,
                 "physical_state": str(report.state),
+                "motion_audit": _motion_audit(report),
+                "collateral_motion_audit": collateral_audit,
+                "plan_audit": plan_audit,
             },
         )
 
@@ -246,11 +385,21 @@ class IsaacWorkflowServices:
         if self.measurement_controller is None:
             return _ExecutionReport(False, "measurement robot controller is not configured", {})
         assert action.target_pose_world is not None
-        report = self.measurement_controller.navigate_to(action.target_pose_world[:3, 3])
+        route = action.parameters.get("base_route_m")
+        report = (
+            self.measurement_controller.navigate_route(route)
+            if route and hasattr(self.measurement_controller, "navigate_route")
+            else self.measurement_controller.navigate_to(action.target_pose_world[:3, 3])
+        )
         return _ExecutionReport(
             report.success,
             report.message,
-            {"steps": report.steps, "detector_path": action.target_prim_path},
+            {
+                "steps": report.steps,
+                "detector_path": action.target_prim_path,
+                "base_route_m": route,
+                "motion_audit": _motion_audit(report),
+            },
         )
 
     def _execute_decontamination(self, action: CountermeasureAction) -> _ExecutionReport:
@@ -258,11 +407,74 @@ class IsaacWorkflowServices:
         decontaminator = self.decontaminators.get(surface_path)
         if decontaminator is None:
             return _ExecutionReport(False, f"no contact decontaminator for {surface_path}", {})
+        collateral_before = self._collateral_positions()
+        stow = None
+        if self.controller is not None and hasattr(self.controller, "stow_arm"):
+            stow = self.controller.stow_arm()
+            if not stow.success:
+                return _ExecutionReport(
+                    False,
+                    stow.message,
+                    {"steps": stow.steps, "stow_audit": _motion_audit(stow)},
+                )
+        navigation = None
         if self.controller is not None and "pickup_base_position_m" in action.parameters:
-            navigation = self.controller.navigate_to(action.parameters["pickup_base_position_m"])
+            route = action.parameters.get("pickup_base_route_m")
+            navigation = (
+                self.controller.navigate_route(
+                    route,
+                    action.parameters.get("pickup_base_yaw_rad"),
+                )
+                if route and hasattr(self.controller, "navigate_route")
+                else self.controller.navigate_to(action.parameters["pickup_base_position_m"])
+            )
             if not navigation.success:
-                return _ExecutionReport(False, navigation.message, {"steps": navigation.steps})
+                return _ExecutionReport(
+                    False,
+                    navigation.message,
+                    {
+                        "steps": navigation.steps + (0 if stow is None else stow.steps),
+                        "stow_audit": None if stow is None else _motion_audit(stow),
+                        "navigation_audit": _motion_audit(navigation),
+                        "base_route_m": route,
+                    },
+                )
         duration = float(action.parameters.get("duration_s", action.predicted_duration_s))
+        if self.controller is not None and hasattr(
+            self.controller, "execute_surface_decontamination"
+        ):
+            report = self.controller.execute_surface_decontamination(
+                decontaminator,
+                duration,
+            )
+            digest = decontaminator.flush()
+            self.simulation.refresh_scene_state()
+            collateral_audit, collateral_violations = self._collateral_motion_audit(
+                collateral_before
+            )
+            success = bool(report.success) and not collateral_violations
+            return _ExecutionReport(
+                success,
+                "articulated contact decontamination completed"
+                if success
+                else (
+                    "unintended object motion detected during decontamination"
+                    if collateral_violations
+                    else "articulated contact decontamination failed"
+                ),
+                {
+                    "surface_path": surface_path,
+                    "accepted_contacts": int(report.accepted_contacts),
+                    "removed_activity_bq": float(report.removed_activity_bq),
+                    "activity_map_sha256": digest,
+                    "stow_audit": None if stow is None else _motion_audit(stow),
+                    "navigation_audit": (
+                        None if navigation is None else _motion_audit(navigation)
+                    ),
+                    "motion_audit": _motion_audit(report),
+                    "collateral_motion_audit": collateral_audit,
+                },
+            )
         ticks = max(1, int(math.ceil(duration / self.physics_dt_s)))
         removed = 0.0
         contacts = 0
@@ -301,6 +513,57 @@ class IsaacWorkflowServices:
             return self._pick_and_place(action)
         return _ExecutionReport(False, f"unsupported action type: {action.action_type}", {})
 
+    def _update_shield_deployment_metadata(
+        self, action: CountermeasureAction
+    ) -> Mapping[str, object]:
+        """Commit public shield state only after physical placement succeeds."""
+
+        if action.action_type not in {ActionType.PLACE_SHIELD, ActionType.MOVE_SHIELD}:
+            return {}
+        shield_path = str(action.target_prim_path or "")
+        if not shield_path:
+            raise RuntimeError("a successful shield action has no target prim path")
+        placement_fraction = action.parameters.get("placement_fraction")
+        if not isinstance(placement_fraction, (int, float)):
+            raise RuntimeError("a successful shield action has no placement fraction")
+        placement_fraction = float(placement_fraction)
+        if not math.isfinite(placement_fraction) or not 0.0 <= placement_fraction <= 1.0:
+            raise RuntimeError("shield placement fraction must be finite and in [0, 1]")
+
+        stage = getattr(self.candidate_generator, "stage", None)
+        if stage is None:
+            stage = getattr(self.controller, "stage", None)
+        if stage is None:
+            raise RuntimeError("shield deployment metadata requires a live USD stage")
+        shield = stage.GetPrimAtPath(shield_path)
+        if not shield or not shield.IsValid():
+            raise RuntimeError(f"shield prim is unavailable after placement: {shield_path}")
+
+        deployed_attribute = shield.GetAttribute("rad:shield:deployed")
+        fraction_attribute = shield.GetAttribute("rad:shield:placementFraction")
+        if (
+            not deployed_attribute
+            or not deployed_attribute.IsValid()
+            or not fraction_attribute
+            or not fraction_attribute.IsValid()
+        ):
+            from pxr import Sdf
+
+        if not deployed_attribute or not deployed_attribute.IsValid():
+            deployed_attribute = shield.CreateAttribute(
+                "rad:shield:deployed", Sdf.ValueTypeNames.Bool, custom=True
+            )
+        deployed_attribute.Set(True)
+        if not fraction_attribute or not fraction_attribute.IsValid():
+            fraction_attribute = shield.CreateAttribute(
+                "rad:shield:placementFraction", Sdf.ValueTypeNames.Double, custom=True
+            )
+        fraction_attribute.Set(placement_fraction)
+        return {
+            "deployment_state": "deployed",
+            "placement_fraction": placement_fraction,
+        }
+
     def _consume(self, action: CountermeasureAction) -> None:
         self.resources.consume(action.resource_cost)
         runtime = self.resources.remaining_robot_runtime_s.get(action.robot_id)
@@ -318,7 +581,9 @@ class IsaacWorkflowServices:
         self.resources.remaining_countermeasure_count = max(
             0, self.resources.remaining_countermeasure_count - 1
         )
-        if action.action_type in {ActionType.PLACE_SHIELD, ActionType.MOVE_SHIELD}:
+        # Deployment consumes one inventory unit. Repositioning an already
+        # deployed physical panel consumes time, but never another panel.
+        if action.action_type == ActionType.PLACE_SHIELD:
             shield_type = str(action.parameters.get("shield_type", "default"))
             if shield_type in self.resources.remaining_shield_units:
                 units = int(action.parameters.get("shield_units", 1))
@@ -357,11 +622,16 @@ class IsaacWorkflowServices:
         except Exception as exc:
             report = _ExecutionReport(False, f"{type(exc).__name__}: {exc}", {})
         if report.success:
+            shield_state = self._update_shield_deployment_metadata(action)
             self._consume(action)
             self._bump_revision(action)
             changed = self.simulation.synchronize()
             status = ActionStatus.COMPLETED
-            details = {**report.public_details, "changed_paths": list(changed)}
+            details = {
+                **report.public_details,
+                **shield_state,
+                "changed_paths": list(changed),
+            }
         else:
             status = ActionStatus.FAILED
             details = dict(report.public_details)

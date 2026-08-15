@@ -8,8 +8,8 @@ import subprocess
 from dataclasses import dataclass
 
 from radcounter.core.rendering.models import (
-    RenderMode,
     RendererPolicyConfig,
+    RenderMode,
     RenderPurpose,
     RenderQualityTier,
 )
@@ -175,10 +175,15 @@ def budget_for_tier(
     }
     if config.mode is not RenderMode.AUTO:
         mode = config.mode
-    elif purpose is RenderPurpose.CAPTURE and config.allow_path_tracing_for_capture and tier in {
-        RenderQualityTier.STRONG,
-        RenderQualityTier.BALANCED,
-    }:
+    elif (
+        purpose is RenderPurpose.CAPTURE
+        and config.allow_path_tracing_for_capture
+        and tier
+        in {
+            RenderQualityTier.STRONG,
+            RenderQualityTier.BALANCED,
+        }
+    ):
         mode = RenderMode.PATH_TRACING
     elif tier is RenderQualityTier.FALLBACK:
         mode = RenderMode.STORM

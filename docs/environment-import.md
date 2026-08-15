@@ -51,12 +51,26 @@ cache directory:
   pickle data.
 - `environment.usda`: generated lazily when Isaac Sim loads the result.
 
-In the RadCounterSim Isaac window, the load field accepts a mesh/CAD/map file,
-an environment descriptor, a generated `manifest.json`, or an existing USD
-stage. A direct USD path preserves the existing stage and prim paths. Put an
-arbitrary untagged USD asset in a descriptor when it should be wrapped with
-default collision and radiation-material metadata. Existing USD-only workflows
-are unchanged.
+Named system profiles can combine an environment descriptor with independently
+selected robot and detector sets. See `docs/system-profiles.md` and use
+`uv run radcounter-system list`. The Fukushima Daiichi SolidWorks integration
+also documents its native SolidWorks-to-USD conversion there. On Linux this is
+performed by the HOOPS Exchange converter bundled with Isaac Sim; `.SLDASM`
+and `.SLDPRT` are not passed to the simulator as if they were portable meshes.
+
+In the RadCounterSim Operations window, operators select an environment, robot
+set, and detector set by display name and press **Apply selected configuration**.
+No catalog ID, file path, or CLI knowledge is needed for normal operation.
+Invalid detector/robot combinations are rejected before the stage changes.
+The separate LLM field controls robot tasks; it does not interpret or change
+the system-selection controls. Catalog environments may declare reviewed local
+preparation scripts; when their asset is missing the Apply button becomes a
+one-click **Prepare** action instead of asking the operator to run commands.
+
+A direct USD path preserves the existing stage and prim paths. Put an arbitrary
+untagged USD asset in a descriptor when it should be wrapped with default
+collision and radiation-material metadata. Existing USD-only workflows are
+unchanged.
 
 ## Descriptor
 

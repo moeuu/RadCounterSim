@@ -71,9 +71,7 @@ class HighDoseCameraModel:
         permanent_count = self._update_permanent_damage(height * width)
 
         onset_ratio = max(0.0, dose_rate_gy_h / self.config.onset_dose_rate_gy_h - 1.0)
-        drop_probability = 1.0 - np.exp(
-            -self.config.drop_rate_per_s * onset_ratio * exposure_s
-        )
+        drop_probability = 1.0 - np.exp(-self.config.drop_rate_per_s * onset_ratio * exposure_s)
         dropped = bool(self._rng.random() < drop_probability)
         if dropped:
             held = self._previous if self._previous is not None else np.zeros_like(source)
@@ -108,9 +106,7 @@ class HighDoseCameraModel:
         color_fraction = 1.0 / (1.0 + dose_rate_gy_h / half_rate)
         luminance = np.sum(rgb * np.asarray([0.2126, 0.7152, 0.0722]), axis=2, keepdims=True)
         rgb = luminance + color_fraction * (rgb - luminance)
-        bloom = self.config.bloom_gain * np.log1p(
-            dose_rate_gy_h / self.config.onset_dose_rate_gy_h
-        )
+        bloom = self.config.bloom_gain * np.log1p(dose_rate_gy_h / self.config.onset_dose_rate_gy_h)
         rgb += bloom * np.maximum(rgb - 0.75, 0.0)
         noise_std = self.config.read_noise_std * np.sqrt(1.0 + onset_ratio)
         if noise_std:
@@ -171,10 +167,7 @@ class HighDoseCameraModel:
 
     @staticmethod
     def _to_float(image: np.ndarray) -> tuple[np.ndarray, np.ndarray | None, float]:
-        if np.issubdtype(image.dtype, np.integer):
-            scale = float(np.iinfo(image.dtype).max)
-        else:
-            scale = 1.0
+        scale = float(np.iinfo(image.dtype).max) if np.issubdtype(image.dtype, np.integer) else 1.0
         rgb = image[..., :3].astype(np.float32) / scale
         alpha = image[..., 3:4].copy() if image.shape[2] == 4 else None
         return rgb, alpha, scale

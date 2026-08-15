@@ -68,9 +68,21 @@ PACKBOT_FUKUSHIMA = RealRobotReference(
     maximum_speed_m_s=9.3 / 3.6,
     nominal_endurance_s=4.0 * 3600.0,
     sensor_hardpoints=(
-        SensorHardpoint("front_camera", "camera_link", (0.31, 0.0, 0.27), intended_sensor="RGB inspection camera"),
-        SensorHardpoint("survey_lidar", "lidar_link", (0.02, 0.0, 0.39), intended_sensor="3-D LiDAR"),
-        SensorHardpoint("radiation", "radiation_link", (0.08, 0.18, 0.40), intended_sensor="gamma dose-rate or spectroscopic detector"),
+        SensorHardpoint(
+            "front_camera",
+            "camera_link",
+            (0.31, 0.0, 0.27),
+            intended_sensor="RGB inspection camera",
+        ),
+        SensorHardpoint(
+            "survey_lidar", "lidar_link", (0.02, 0.0, 0.39), intended_sensor="3-D LiDAR"
+        ),
+        SensorHardpoint(
+            "radiation",
+            "radiation_link",
+            (0.08, 0.18, 0.40),
+            intended_sensor="gamma dose-rate or spectroscopic detector",
+        ),
     ),
 )
 
@@ -95,9 +107,18 @@ ELIOS3_RAD = RealRobotReference(
     ),
     nominal_endurance_s=7.5 * 60.0,
     sensor_hardpoints=(
-        SensorHardpoint("front_camera", "camera_link", (0.18, 0.0, -0.01), intended_sensor="inspection RGB/thermal camera group"),
-        SensorHardpoint("lidar", "lidar_link", (-0.02, 0.0, -0.10), intended_sensor="Ouster OS0 LiDAR"),
-        SensorHardpoint("radiation", "radiation_link", (-0.12, 0.0, -0.12), intended_sensor="Mirion RDS-32 WR"),
+        SensorHardpoint(
+            "front_camera",
+            "camera_link",
+            (0.18, 0.0, -0.01),
+            intended_sensor="inspection RGB/thermal camera group",
+        ),
+        SensorHardpoint(
+            "lidar", "lidar_link", (-0.02, 0.0, -0.10), intended_sensor="Ouster OS0 LiDAR"
+        ),
+        SensorHardpoint(
+            "radiation", "radiation_link", (-0.12, 0.0, -0.12), intended_sensor="Mirion RDS-32 WR"
+        ),
     ),
 )
 
@@ -105,7 +126,13 @@ MHI_MEISTER = RealRobotReference(
     id="mhi-meister",
     manufacturer="Mitsubishi Heavy Industries",
     model="MEISTeR",
-    roles=("shield handling", "obstacle removal", "core sampling", "dry decontamination", "suction"),
+    roles=(
+        "shield handling",
+        "obstacle removal",
+        "core sampling",
+        "dry decontamination",
+        "suction",
+    ),
     source_urls=(
         "https://www.mhi.com/business/products-services/energy-environment/nuclear-power-generation/robot-mechatronics/meister",
         "https://www.mhi.com/news/1402201775.html",
@@ -121,10 +148,27 @@ MHI_MEISTER = RealRobotReference(
     maximum_speed_m_s=2.0 / 3.6,
     nominal_endurance_s=2.0 * 3600.0,
     sensor_hardpoints=(
-        SensorHardpoint("head_camera", "head_camera_link", (0.30, 0.0, 1.17), intended_sensor="stereo inspection camera"),
-        SensorHardpoint("dose_meter", "base_link", (0.12, 0.28, 0.66), intended_sensor="ion chamber"),
-        SensorHardpoint("left_tool", "left_tool0", (0.0, 0.0, 0.0), intended_sensor="tool camera / contact sensor"),
-        SensorHardpoint("right_tool", "right_tool0", (0.0, 0.0, 0.0), intended_sensor="tool camera / force sensor"),
+        SensorHardpoint(
+            "head_camera",
+            "head_camera_link",
+            (0.30, 0.0, 1.17),
+            intended_sensor="stereo inspection camera",
+        ),
+        SensorHardpoint(
+            "dose_meter", "base_link", (0.12, 0.28, 0.66), intended_sensor="ion chamber"
+        ),
+        SensorHardpoint(
+            "left_tool",
+            "left_tool0",
+            (0.0, 0.0, 0.0),
+            intended_sensor="tool camera / contact sensor",
+        ),
+        SensorHardpoint(
+            "right_tool",
+            "right_tool0",
+            (0.0, 0.0, 0.0),
+            intended_sensor="tool camera / force sensor",
+        ),
     ),
 )
 
@@ -147,16 +191,23 @@ HITACHI_AROUNDER = RealRobotReference(
         "remote pump, recovery tank, hose reel and corner rollers",
     ),
     sensor_hardpoints=(
-        SensorHardpoint("navigation_camera", "base_link", (0.42, 0.0, 0.82), intended_sensor="radiation-resistant navigation camera"),
-        SensorHardpoint("head_camera", "treatment_head", (0.08, 0.0, 0.18), intended_sensor="treatment-head camera"),
+        SensorHardpoint(
+            "navigation_camera",
+            "base_link",
+            (0.42, 0.0, 0.82),
+            intended_sensor="radiation-resistant navigation camera",
+        ),
+        SensorHardpoint(
+            "head_camera",
+            "treatment_head",
+            (0.08, 0.0, 0.18),
+            intended_sensor="treatment-head camera",
+        ),
     ),
 )
 
 REAL_ROBOT_REFERENCES = MappingProxyType(
-    {
-        item.id: item
-        for item in (PACKBOT_FUKUSHIMA, ELIOS3_RAD, MHI_MEISTER, HITACHI_AROUNDER)
-    }
+    {item.id: item for item in (PACKBOT_FUKUSHIMA, ELIOS3_RAD, MHI_MEISTER, HITACHI_AROUNDER)}
 )
 
 
@@ -165,7 +216,9 @@ def get_real_robot_reference(model_id: str) -> RealRobotReference:
         return REAL_ROBOT_REFERENCES[model_id]
     except KeyError as exc:
         choices = ", ".join(sorted(REAL_ROBOT_REFERENCES))
-        raise KeyError(f"Unknown real robot reference {model_id!r}; choose one of: {choices}") from exc
+        raise KeyError(
+            f"Unknown real robot reference {model_id!r}; choose one of: {choices}"
+        ) from exc
 
 
 def reference_config(model_id: str) -> RobotReferenceConfig:

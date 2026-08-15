@@ -1,16 +1,19 @@
-"""Isaac Sim launcher guard."""
+#!/usr/bin/env python3
+"""Launch the complete articulated RadCounterSim GUI workflow."""
 
+from __future__ import annotations
 
-def main() -> int:
-    try:
-        import isaacsim  # type: ignore[import-not-found]  # noqa: F401
-    except ModuleNotFoundError as exc:
-        raise SystemExit(
-            "Isaac Sim 6.0.1 is not available. "
-            "Launch this script with the Isaac Sim Python runtime."
-        ) from exc
-    raise SystemExit("Merge the local official Isaac Sim 6.0.1 UI template before GUI use.")
+import sys
+from pathlib import Path
 
+from run_gui_validation import main
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    root = Path(__file__).resolve().parents[1]
+    arguments = [
+        "--interactive",
+        "--artifact",
+        str(root / "artifacts/app/latest.json"),
+        *sys.argv[1:],
+    ]
+    raise SystemExit(main(arguments))

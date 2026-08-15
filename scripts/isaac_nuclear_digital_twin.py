@@ -29,7 +29,6 @@ def main() -> None:
     app = SimulationApp({"headless": args.headless})
     import omni.timeline
     import omni.usd
-
     from radcounter.isaac.rendering import NuclearDigitalTwinRuntime
 
     context = omni.usd.get_context()

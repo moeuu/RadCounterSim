@@ -203,9 +203,11 @@ def _author_camera(stage, low: np.ndarray, high: np.ndarray) -> str:
     camera = UsdGeom.Camera.Define(stage, path)
     camera.CreateFocalLengthAttr(32.0)
     camera.CreateClippingRangeAttr((0.05, 10_000.0))
-    matrix = Gf.Matrix4d().SetLookAt(
-        Gf.Vec3d(*eye), Gf.Vec3d(*target), Gf.Vec3d(0.0, 0.0, 1.0)
-    ).GetInverse()
+    matrix = (
+        Gf.Matrix4d()
+        .SetLookAt(Gf.Vec3d(*eye), Gf.Vec3d(*target), Gf.Vec3d(0.0, 0.0, 1.0))
+        .GetInverse()
+    )
     UsdGeom.Xformable(camera.GetPrim()).AddTransformOp().Set(matrix)
     return path
 
@@ -234,8 +236,10 @@ def main() -> None:
         gpu.free_vram_gb if gpu.free_vram_gb is not None else gpu.vram_gb,
     )
     low_memory = available_vram_gb < 6.0
-    forced_tier = RenderQualityTier.FALLBACK if available_vram_gb < 3.5 else (
-        RenderQualityTier.WEAK if low_memory else None
+    forced_tier = (
+        RenderQualityTier.FALLBACK
+        if available_vram_gb < 3.5
+        else (RenderQualityTier.WEAK if low_memory else None)
     )
     effective_capture = args.capture and not low_memory
 
@@ -254,7 +258,6 @@ def main() -> None:
     import omni.usd
     from omni.kit.viewport.utility import capture_viewport_to_file, get_active_viewport
     from pxr import Gf, UsdGeom
-
     from radcounter.isaac.rendering import NuclearDigitalTwinRuntime
 
     context = omni.usd.get_context()
@@ -300,7 +303,6 @@ def main() -> None:
 
     timeline = omni.timeline.get_timeline_interface()
     started = time.monotonic()
-    previous = started
     frame_times: list[float] = []
     route_distance = 0.0
     route_index = 0
@@ -311,9 +313,7 @@ def main() -> None:
             len(route) - 2,
             int((now - started) / max(args.duration_s, 0.001) * (len(route) - 1)),
         )
-        fraction = (
-            (now - started) / max(args.duration_s, 0.001) * (len(route) - 1) - route_index
-        )
+        fraction = (now - started) / max(args.duration_s, 0.001) * (len(route) - 1) - route_index
         position = route[route_index] * (1.0 - fraction) + route[route_index + 1] * fraction
         delta = route[route_index + 1] - route[route_index]
         robot_translate.Set(Gf.Vec3d(float(position[0]), float(position[1]), 0.02))
@@ -324,7 +324,6 @@ def main() -> None:
         runtime.observe_frame_time(elapsed_ms)
         route_distance += float(np.linalg.norm(position[:2] - previous_position[:2]))
         previous_position = position
-        previous = now
 
     timeline.pause()
     for _ in range(180 if effective_capture else 60):

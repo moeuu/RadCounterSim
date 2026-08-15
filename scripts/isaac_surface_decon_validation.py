@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import subprocess
 import sys
 import time
 import traceback
@@ -40,11 +41,40 @@ def parse_arguments() -> argparse.Namespace:
         type=Path,
         default=ROOT / ".cache/arounder-water-decon",
     )
+    parser.add_argument(
+        "--render-only",
+        action="store_true",
+        help="render the decommissioning overview and process-head detail without running a sweep",
+    )
+    parser.add_argument(
+        "--render-video",
+        action="store_true",
+        help="render a high-reach wall-decontamination frame sequence and encode an MP4",
+    )
+    parser.add_argument("--video-seconds", type=float, default=20.0)
+    parser.add_argument("--video-fps", type=int, default=15)
+    parser.add_argument(
+        "--render-scene",
+        choices=("decontamination", "shield-manipulation"),
+        default="decontamination",
+        help="select the isolated research scene produced by --render-only",
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="render off-screen without creating an X11 application window",
+    )
     args = parser.parse_args()
     if args.duration <= 0.0:
         parser.error("--duration must be positive")
     if args.time_scale <= 0.0:
         parser.error("--time-scale must be positive")
+    if args.video_seconds <= 0.0:
+        parser.error("--video-seconds must be positive")
+    if args.video_fps <= 0:
+        parser.error("--video-fps must be positive")
+    if args.render_only and args.render_video:
+        parser.error("--render-only and --render-video are mutually exclusive")
     return args
 
 
@@ -54,7 +84,7 @@ from isaacsim import SimulationApp
 
 simulation_app = SimulationApp(
     {
-        "headless": False,
+        "headless": ARGS.headless,
         "width": 1440,
         "height": 900,
         "renderer": "RaytracedLighting",
@@ -72,7 +102,11 @@ from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
 from radcounter.isaac.robot.input_router import IsaacRobotInputRouter
 
 from radcounter.core.robots.control import JointCommand, TwistCommand
-from radcounter.core.surface_decontamination import DecontaminationTool, SurfaceSourceGrid
+from radcounter.core.surface_decontamination import (
+    DecontaminationTool,
+    SurfaceSourceGrid,
+    irregular_deposition_field,
+)
 from radcounter.core.water_decontamination import (
     WaterDecontaminationState,
     WaterJetSpec,
@@ -82,6 +116,8 @@ from radcounter.core.water_decontamination import (
 ROBOT_ID = "arounder_research_replica"
 ROBOT_PATH = "/World/Arounder"
 SOURCE_PATH = "/World/ReactorBuilding/ContaminatedFloor"
+HIGH_WALL_SOURCE_PATH = "/World/ReactorBuilding/ContaminatedHighWall"
+HIGH_REACH_ROBOT_PATH = "/World/HighReach10"
 DT_S = 1.0 / 60.0
 HEAD_X_M = 0.95
 HEAD_NOZZLE_Z_M = -0.17
@@ -93,6 +129,22 @@ PHYSICAL_WASH_SPEED_M_S = TARGET_TREATMENT_RATE_M2_H / 3600.0 / HEAD_WIDTH_M
 
 HITACHI_REFERENCE = "https://www.hitachi-hgne.co.jp/news/2013/20130308.html"
 IRID_REFERENCE = "https://irid.or.jp/_pdf/20150714_5.pdf"
+MHI_SUPER_GIRAFFE_REFERENCE = (
+    "https://www.mhi.com/jp/business/products-services/energy-environment/"
+    "nuclear-power-generation/applied-products/robot-mechatronics/super-giraffe"
+)
+IRID_HIGH_PLACE_REFERENCE = (
+    "https://irid.or.jp/topics/"
+    "%E9%AB%98%E6%89%80%E7%94%A8%E3%83%89%E3%83%A9%E3%82%A4%E3%82%A2%E3%82%A4%E3%82%B9"
+    "%E3%83%96%E3%83%A9%E3%82%B9%E3%83%88%E9%99%A4%E6%9F%93%E8%A3%85%E7%BD%AE%E3%81%AE"
+    "%E9%96%8B%E7%99%BA%E3%83%BB%E6%B4%BB/"
+)
+RIDGEBACK_FRANKA_REFERENCE = (
+    "https://docs.isaacsim.omniverse.nvidia.com/6.0.0/assets/usd_assets_robots.html"
+)
+RIDGEBACK_FRANKA_ASSET = "/Isaac/Robots/Clearpath/RidgebackFranka/ridgeback_franka.usd"
+MANIPULATOR_PATH = "/World/CountermeasureRobot"
+SHIELD_PATH = "/World/ShieldManipulation/ShieldCassette"
 
 
 @dataclass(frozen=True)
@@ -138,18 +190,35 @@ def create_materials(stage) -> dict[str, object]:
         "yellow": define_material(stage, "IndustrialYellow", (0.91, 0.56, 0.035), roughness=0.34),
         "yellow_dark": define_material(stage, "IndustrialYellowDark", (0.54, 0.30, 0.02)),
         "track": define_material(stage, "CrawlerRubber", (0.018, 0.022, 0.024), roughness=0.92),
-        "steel": define_material(stage, "StainlessSteel", (0.52, 0.56, 0.57), metallic=0.82, roughness=0.24),
+        "steel": define_material(
+            stage, "StainlessSteel", (0.52, 0.56, 0.57), metallic=0.82, roughness=0.24
+        ),
         "dark_steel": define_material(stage, "DarkSteel", (0.09, 0.11, 0.12), metallic=0.72),
         "pipe": define_material(stage, "PipeSteel", (0.31, 0.35, 0.36), metallic=0.65),
         "blue": define_material(stage, "WaterLineBlue", (0.03, 0.24, 0.62), metallic=0.18),
         "red": define_material(stage, "ProcessRed", (0.60, 0.055, 0.035), metallic=0.12),
         "green": define_material(stage, "RecoveryGreen", (0.04, 0.38, 0.17), metallic=0.10),
-        "glass": define_material(stage, "LensGlass", (0.025, 0.14, 0.19), metallic=0.15, roughness=0.08),
+        "glass": define_material(
+            stage, "LensGlass", (0.025, 0.14, 0.19), metallic=0.15, roughness=0.08
+        ),
         "brush": define_material(stage, "ContainmentBrush", (0.018, 0.018, 0.014), roughness=0.98),
-        "water": define_material(stage, "WaterJet", (0.05, 0.40, 0.95), roughness=0.08, opacity=0.42),
-        "wet": define_material(stage, "WetFloor", (0.025, 0.12, 0.20), roughness=0.10, opacity=0.58),
+        "water": define_material(
+            stage, "WaterJet", (0.05, 0.40, 0.95), roughness=0.08, opacity=0.42
+        ),
+        "wet": define_material(
+            stage, "WetFloor", (0.025, 0.12, 0.20), roughness=0.10, opacity=0.58
+        ),
         "white": define_material(stage, "PaintedWhite", (0.72, 0.74, 0.70), roughness=0.54),
         "orange": define_material(stage, "SafetyOrange", (0.94, 0.24, 0.025), roughness=0.45),
+        "lead": define_material(
+            stage, "ShieldLeadCore", (0.13, 0.15, 0.16), metallic=0.78, roughness=0.42
+        ),
+        "shield_skin": define_material(
+            stage, "ShieldStainlessJacket", (0.28, 0.31, 0.32), metallic=0.86, roughness=0.25
+        ),
+        "corrosion": define_material(
+            stage, "ContaminatedCorrosion", (0.38, 0.12, 0.035), metallic=0.20, roughness=0.88
+        ),
     }
 
 
@@ -224,6 +293,26 @@ def add_link(stage, path: str, start_xz, end_xz, y_m: float, width_m: float, mat
     )
 
 
+def add_link_3d(stage, path: str, start_xyz, end_xyz, width_m: float, material):
+    start = np.asarray(start_xyz, dtype=np.float64)
+    end = np.asarray(end_xyz, dtype=np.float64)
+    delta = end - start
+    length = float(np.linalg.norm(delta))
+    if length <= 1e-9:
+        raise ValueError("3-D link endpoints must be distinct")
+    horizontal = math.hypot(float(delta[0]), float(delta[1]))
+    yaw_z = math.degrees(math.atan2(float(delta[1]), float(delta[0])))
+    pitch_y = -math.degrees(math.atan2(float(delta[2]), horizontal))
+    return add_cube(
+        stage,
+        path,
+        (length, width_m, width_m),
+        tuple(float(value) for value in 0.5 * (start + end)),
+        material,
+        rotation_xyz=(0.0, pitch_y, yaw_z),
+    )
+
+
 def add_curve(stage, path: str, points, width_m: float, color) -> object:
     curve = UsdGeom.BasisCurves.Define(stage, path)
     curve.CreateTypeAttr(UsdGeom.Tokens.linear)
@@ -235,8 +324,12 @@ def add_curve(stage, path: str, points, width_m: float, color) -> object:
     return points_attr
 
 
-def create_environment(stage, materials) -> tuple[tuple[float, float, float], ...]:
+def create_environment(
+    stage, materials, *, high_bay: bool = False
+) -> tuple[tuple[float, float, float], ...]:
     UsdGeom.Xform.Define(stage, "/World/ReactorBuilding")
+    wall_height_m = 13.0 if high_bay else 5.0
+    column_height_m = 12.6 if high_bay else 4.8
     add_cube(
         stage,
         "/World/ReactorBuilding/Floor",
@@ -245,69 +338,290 @@ def create_environment(stage, materials) -> tuple[tuple[float, float, float], ..
         materials["epoxy"],
         collision=True,
     )
-    add_cube(stage, "/World/ReactorBuilding/WallNorth", (16.0, 0.26, 5.0), (0.0, 5.86, 2.5), materials["concrete"], collision=True)
-    add_cube(stage, "/World/ReactorBuilding/WallWest", (0.26, 12.0, 5.0), (-7.86, 0.0, 2.5), materials["concrete"], collision=True)
-    add_cube(stage, "/World/ReactorBuilding/WallEast", (0.26, 8.0, 5.0), (7.86, 2.0, 2.5), materials["concrete"], collision=True)
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/WallNorth",
+        (16.0, 0.26, wall_height_m),
+        (0.0, 5.86, wall_height_m * 0.5),
+        materials["concrete"],
+        collision=True,
+    )
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/WallWest",
+        (0.26, 12.0, wall_height_m),
+        (-7.86, 0.0, wall_height_m * 0.5),
+        materials["concrete"],
+        collision=True,
+    )
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/WallEast",
+        (0.26, 8.0, wall_height_m),
+        (7.86, 2.0, wall_height_m * 0.5),
+        materials["concrete"],
+        collision=True,
+    )
 
-    for index, (x_m, y_m) in enumerate(((-5.4, 4.2), (0.0, 4.2), (5.4, 4.2), (-5.4, -4.1), (5.4, -4.1))):
-        add_cube(stage, f"/World/ReactorBuilding/Columns/C{index}", (0.52, 0.52, 4.8), (x_m, y_m, 2.4), materials["concrete"], collision=True)
-        add_cube(stage, f"/World/ReactorBuilding/Columns/C{index}_Foot", (0.82, 0.82, 0.16), (x_m, y_m, 0.08), materials["concrete"], collision=True)
+    column_positions = (
+        ((-6.4, 4.2), (6.4, 4.2), (-6.4, -4.1), (6.4, -4.1))
+        if high_bay
+        else ((-5.4, 4.2), (0.0, 4.2), (5.4, 4.2), (-5.4, -4.1), (5.4, -4.1))
+    )
+    for index, (x_m, y_m) in enumerate(column_positions):
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/Columns/C{index}",
+            (0.52, 0.52, column_height_m),
+            (x_m, y_m, column_height_m * 0.5),
+            materials["concrete"],
+            collision=True,
+        )
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/Columns/C{index}_Foot",
+            (0.82, 0.82, 0.16),
+            (x_m, y_m, 0.08),
+            materials["concrete"],
+            collision=True,
+        )
 
-    add_cylinder(stage, "/World/ReactorBuilding/BiologicalShield", 1.62, 4.3, (4.8, 2.25, 2.15), materials["concrete"], collision=True)
-    add_cylinder(stage, "/World/ReactorBuilding/BiologicalShieldRing", 1.82, 0.26, (4.8, 2.25, 0.18), materials["dark_steel"], collision=True)
+    add_cylinder(
+        stage,
+        "/World/ReactorBuilding/BiologicalShield",
+        1.62,
+        8.8 if high_bay else 4.3,
+        (4.8, 2.25, 4.4 if high_bay else 2.15),
+        materials["concrete"],
+        collision=True,
+    )
+    add_cylinder(
+        stage,
+        "/World/ReactorBuilding/BiologicalShieldRing",
+        1.82,
+        0.26,
+        (4.8, 2.25, 0.18),
+        materials["dark_steel"],
+        collision=True,
+    )
 
     pipe_specs = (
         ("Condensate", 0.16, 1.25, materials["blue"]),
         ("FireMain", 0.13, 1.85, materials["red"]),
         ("Vent", 0.22, 2.55, materials["pipe"]),
     )
+    if high_bay:
+        pipe_specs += (
+            ("HighSteam", 0.25, 7.15, materials["pipe"]),
+            ("HighService", 0.18, 11.15, materials["blue"]),
+        )
     for name, radius, z_m, material in pipe_specs:
-        add_cylinder(stage, f"/World/ReactorBuilding/PipeRack/{name}", radius, 13.8, (0.0, 5.25, z_m), material, axis="X")
+        add_cylinder(
+            stage,
+            f"/World/ReactorBuilding/PipeRack/{name}",
+            radius,
+            13.8,
+            (0.0, 5.25, z_m),
+            material,
+            axis="X",
+        )
+    rack_support_height_m = 11.8 if high_bay else 3.1
     for index, x_m in enumerate((-6.2, -3.0, 0.2, 3.4, 6.3)):
-        add_cube(stage, f"/World/ReactorBuilding/PipeRack/Support{index}", (0.12, 0.55, 3.1), (x_m, 5.22, 1.55), materials["dark_steel"], collision=True)
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/PipeRack/Support{index}",
+            (0.12, 0.55, rack_support_height_m),
+            (x_m, 5.22, rack_support_height_m * 0.5),
+            materials["dark_steel"],
+            collision=True,
+        )
 
     for index, (x_m, radius, height) in enumerate(((5.8, 0.48, 1.8), (6.65, 0.36, 1.45))):
-        add_cylinder(stage, f"/World/ReactorBuilding/ProcessSkid/Tank{index}", radius, height, (x_m, -3.7, height * 0.5 + 0.15), materials["white"], collision=True)
-        add_cylinder(stage, f"/World/ReactorBuilding/ProcessSkid/Tank{index}Cap", radius * 0.82, 0.08, (x_m, -3.7, height + 0.18), materials["dark_steel"])
-    add_cube(stage, "/World/ReactorBuilding/ProcessSkid/Base", (2.25, 1.55, 0.18), (5.9, -3.7, 0.09), materials["dark_steel"], collision=True)
+        add_cylinder(
+            stage,
+            f"/World/ReactorBuilding/ProcessSkid/Tank{index}",
+            radius,
+            height,
+            (x_m, -3.7, height * 0.5 + 0.15),
+            materials["white"],
+            collision=True,
+        )
+        add_cylinder(
+            stage,
+            f"/World/ReactorBuilding/ProcessSkid/Tank{index}Cap",
+            radius * 0.82,
+            0.08,
+            (x_m, -3.7, height + 0.18),
+            materials["dark_steel"],
+        )
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/ProcessSkid/Base",
+        (2.25, 1.55, 0.18),
+        (5.9, -3.7, 0.09),
+        materials["dark_steel"],
+        collision=True,
+    )
     for step in range(6):
-        add_cube(stage, f"/World/ReactorBuilding/Stairs/Step{step}", (0.75, 0.32, 0.10), (6.7, -1.65 + step * 0.28, 0.05 + step * 0.11), materials["steel"], collision=True)
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/Stairs/Step{step}",
+            (0.75, 0.32, 0.10),
+            (6.7, -1.65 + step * 0.28, 0.05 + step * 0.11),
+            materials["steel"],
+            collision=True,
+        )
 
     drain_y = -1.42
-    add_cube(stage, "/World/ReactorBuilding/Drain/Channel", (4.2, 0.30, 0.025), (0.35, drain_y, 0.012), materials["dark_steel"])
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/Drain/Channel",
+        (4.2, 0.30, 0.025),
+        (0.35, drain_y, 0.012),
+        materials["dark_steel"],
+    )
     for index, x_m in enumerate(np.linspace(-1.65, 2.35, 24)):
-        add_cube(stage, f"/World/ReactorBuilding/Drain/Bar{index:02d}", (0.035, 0.29, 0.035), (float(x_m), drain_y, 0.028), materials["steel"])
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/Drain/Bar{index:02d}",
+            (0.035, 0.29, 0.035),
+            (float(x_m), drain_y, 0.028),
+            materials["steel"],
+        )
 
-    add_cube(stage, "/World/ReactorBuilding/UtilitySkid/Base", (2.8, 1.75, 0.16), (-5.55, -3.65, 0.08), materials["dark_steel"], collision=True)
-    add_cylinder(stage, "/World/ReactorBuilding/UtilitySkid/RecoveryTank", 0.53, 1.55, (-6.15, -3.65, 0.92), materials["white"], collision=True)
-    add_cylinder(stage, "/World/ReactorBuilding/UtilitySkid/Pump", 0.25, 0.64, (-4.65, -3.80, 0.42), materials["blue"], axis="X")
-    add_cube(stage, "/World/ReactorBuilding/UtilitySkid/ControlCabinet", (0.58, 0.42, 1.05), (-4.75, -3.10, 0.61), materials["yellow_dark"], collision=True)
-    add_cylinder(stage, "/World/ReactorBuilding/HoseReel/Drum", 0.43, 0.68, (-5.15, -2.55, 0.78), materials["yellow"], axis="Y")
-    add_cylinder(stage, "/World/ReactorBuilding/HoseReel/FlangeL", 0.55, 0.07, (-5.15, -2.93, 0.78), materials["yellow_dark"], axis="Y")
-    add_cylinder(stage, "/World/ReactorBuilding/HoseReel/FlangeR", 0.55, 0.07, (-5.15, -2.17, 0.78), materials["yellow_dark"], axis="Y")
-    add_cube(stage, "/World/ReactorBuilding/HoseReel/StandL", (0.10, 0.10, 1.25), (-5.58, -2.85, 0.63), materials["yellow_dark"])
-    add_cube(stage, "/World/ReactorBuilding/HoseReel/StandR", (0.10, 0.10, 1.25), (-4.72, -2.85, 0.63), materials["yellow_dark"])
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/UtilitySkid/Base",
+        (2.8, 1.75, 0.16),
+        (-5.55, -3.65, 0.08),
+        materials["dark_steel"],
+        collision=True,
+    )
+    add_cylinder(
+        stage,
+        "/World/ReactorBuilding/UtilitySkid/RecoveryTank",
+        0.53,
+        1.55,
+        (-6.15, -3.65, 0.92),
+        materials["white"],
+        collision=True,
+    )
+    add_cylinder(
+        stage,
+        "/World/ReactorBuilding/UtilitySkid/Pump",
+        0.25,
+        0.64,
+        (-4.65, -3.80, 0.42),
+        materials["blue"],
+        axis="X",
+    )
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/UtilitySkid/ControlCabinet",
+        (0.58, 0.42, 1.05),
+        (-4.75, -3.10, 0.61),
+        materials["yellow_dark"],
+        collision=True,
+    )
+    add_cylinder(
+        stage,
+        "/World/ReactorBuilding/HoseReel/Drum",
+        0.43,
+        0.68,
+        (-5.15, -2.55, 0.78),
+        materials["yellow"],
+        axis="Y",
+    )
+    add_cylinder(
+        stage,
+        "/World/ReactorBuilding/HoseReel/FlangeL",
+        0.55,
+        0.07,
+        (-5.15, -2.93, 0.78),
+        materials["yellow_dark"],
+        axis="Y",
+    )
+    add_cylinder(
+        stage,
+        "/World/ReactorBuilding/HoseReel/FlangeR",
+        0.55,
+        0.07,
+        (-5.15, -2.17, 0.78),
+        materials["yellow_dark"],
+        axis="Y",
+    )
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/HoseReel/StandL",
+        (0.10, 0.10, 1.25),
+        (-5.58, -2.85, 0.63),
+        materials["yellow_dark"],
+    )
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/HoseReel/StandR",
+        (0.10, 0.10, 1.25),
+        (-4.72, -2.85, 0.63),
+        materials["yellow_dark"],
+    )
 
     roller_points = ((-3.75, -2.25, 0.20), (-2.55, -1.85, 0.20))
     for index, point in enumerate(roller_points):
-        add_cylinder(stage, f"/World/ReactorBuilding/CornerRollers/R{index}", 0.12, 0.32, point, materials["orange"], axis="Z")
-        add_cube(stage, f"/World/ReactorBuilding/CornerRollers/R{index}Base", (0.38, 0.38, 0.04), (point[0], point[1], 0.02), materials["dark_steel"])
+        add_cylinder(
+            stage,
+            f"/World/ReactorBuilding/CornerRollers/R{index}",
+            0.12,
+            0.32,
+            point,
+            materials["orange"],
+            axis="Z",
+        )
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/CornerRollers/R{index}Base",
+            (0.38, 0.38, 0.04),
+            (point[0], point[1], 0.02),
+            materials["dark_steel"],
+        )
 
     for index in range(5):
         x_m = -6.6 + index * 0.55
-        add_cube(stage, f"/World/ReactorBuilding/Barrier/Post{index}", (0.06, 0.06, 0.85), (x_m, -2.65, 0.43), materials["orange"])
-    add_cube(stage, "/World/ReactorBuilding/Barrier/Rail", (2.25, 0.05, 0.06), (-5.5, -2.65, 0.72), materials["orange"])
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/Barrier/Post{index}",
+            (0.06, 0.06, 0.85),
+            (x_m, -2.65, 0.43),
+            materials["orange"],
+        )
+    add_cube(
+        stage,
+        "/World/ReactorBuilding/Barrier/Rail",
+        (2.25, 0.05, 0.06),
+        (-5.5, -2.65, 0.72),
+        materials["orange"],
+    )
 
-    for index, (x_m, y_m, yaw) in enumerate(((-6.5, 1.0, 17.0), (3.4, -4.3, -8.0), (6.7, 0.2, 25.0))):
-        add_cube(stage, f"/World/ReactorBuilding/Debris/Chunk{index}", (0.34, 0.22, 0.14), (x_m, y_m, 0.08), materials["concrete"], rotation_xyz=(0.0, 0.0, yaw), collision=True)
+    for index, (x_m, y_m, yaw) in enumerate(
+        ((-6.5, 1.0, 17.0), (3.4, -4.3, -8.0), (6.7, 0.2, 25.0))
+    ):
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/Debris/Chunk{index}",
+            (0.34, 0.22, 0.14),
+            (x_m, y_m, 0.08),
+            materials["concrete"],
+            rotation_xyz=(0.0, 0.0, yaw),
+            collision=True,
+        )
 
+    light_height_m = 12.35 if high_bay else 4.65
     for index, x_m in enumerate((-4.8, 0.0, 4.8)):
         light = UsdLux.RectLight.Define(stage, f"/World/ReactorBuilding/Lights/L{index}")
         light.CreateIntensityAttr(18_000.0)
         light.CreateWidthAttr(2.2)
         light.CreateHeightAttr(0.25)
         light.CreateColorAttr(Gf.Vec3f(0.78, 0.88, 1.0))
-        light.AddTranslateOp().Set(Gf.Vec3d(x_m, 0.0, 4.65))
+        light.AddTranslateOp().Set(Gf.Vec3d(x_m, 0.0, light_height_m))
         light.AddRotateXYZOp().Set(Gf.Vec3f(0.0, 0.0, 0.0))
 
     return roller_points
@@ -321,55 +635,212 @@ def create_robot(stage, materials, start_xyz) -> RobotVisuals:
     UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(840.0)
     prim.CreateAttribute("rad:robot:id", Sdf.ValueTypeNames.String).Set(ROBOT_ID)
     prim.CreateAttribute("rad:robot:role", Sdf.ValueTypeNames.String).Set("mitigation")
-    prim.CreateAttribute("rad:robot:reference", Sdf.ValueTypeNames.String).Set("Hitachi-GE Arounder")
+    prim.CreateAttribute("rad:robot:reference", Sdf.ValueTypeNames.String).Set(
+        "Hitachi-GE Arounder"
+    )
     prim.CreateAttribute("rad:stream:focus", Sdf.ValueTypeNames.Bool).Set(True)
 
-    add_cube(stage, f"{ROBOT_PATH}/LowerChassis", (1.28, 0.52, 0.30), (-0.05, 0.0, -0.10), materials["yellow_dark"], collision=True)
-    add_cube(stage, f"{ROBOT_PATH}/MainBody", (1.12, 0.54, 0.42), (-0.13, 0.0, 0.16), materials["yellow"], collision=True)
-    add_cube(stage, f"{ROBOT_PATH}/RearPowerPack", (0.46, 0.50, 0.55), (-0.42, 0.0, 0.52), materials["yellow"])
-    add_cube(stage, f"{ROBOT_PATH}/TopServicePanel", (0.62, 0.45, 0.06), (-0.12, 0.0, 0.48), materials["dark_steel"])
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/LowerChassis",
+        (1.28, 0.52, 0.30),
+        (-0.05, 0.0, -0.10),
+        materials["yellow_dark"],
+        collision=True,
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/MainBody",
+        (1.12, 0.54, 0.42),
+        (-0.13, 0.0, 0.16),
+        materials["yellow"],
+        collision=True,
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/RearPowerPack",
+        (0.46, 0.50, 0.55),
+        (-0.42, 0.0, 0.52),
+        materials["yellow"],
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/TopServicePanel",
+        (0.62, 0.45, 0.06),
+        (-0.12, 0.0, 0.48),
+        materials["dark_steel"],
+    )
 
     for side_name, y_m in (("Left", 0.36), ("Right", -0.36)):
-        add_cube(stage, f"{ROBOT_PATH}/Tracks/{side_name}/Belt", (1.50, 0.18, 0.34), (-0.08, y_m, -0.18), materials["track"], collision=True)
+        add_cube(
+            stage,
+            f"{ROBOT_PATH}/Tracks/{side_name}/Belt",
+            (1.50, 0.18, 0.34),
+            (-0.08, y_m, -0.18),
+            materials["track"],
+            collision=True,
+        )
         for wheel_index, x_m in enumerate((-0.57, -0.18, 0.22, 0.57)):
-            add_cylinder(stage, f"{ROBOT_PATH}/Tracks/{side_name}/RoadWheel{wheel_index}", 0.135, 0.19, (x_m, y_m, -0.18), materials["steel"], axis="Y")
-            add_cylinder(stage, f"{ROBOT_PATH}/Tracks/{side_name}/Hub{wheel_index}", 0.055, 0.205, (x_m, y_m, -0.18), materials["yellow_dark"], axis="Y")
+            add_cylinder(
+                stage,
+                f"{ROBOT_PATH}/Tracks/{side_name}/RoadWheel{wheel_index}",
+                0.135,
+                0.19,
+                (x_m, y_m, -0.18),
+                materials["steel"],
+                axis="Y",
+            )
+            add_cylinder(
+                stage,
+                f"{ROBOT_PATH}/Tracks/{side_name}/Hub{wheel_index}",
+                0.055,
+                0.205,
+                (x_m, y_m, -0.18),
+                materials["yellow_dark"],
+                axis="Y",
+            )
         for tread_index, x_m in enumerate(np.linspace(-0.70, 0.54, 10)):
             for surface, z_m in (("Top", -0.005), ("Bottom", -0.355)):
-                add_cube(stage, f"{ROBOT_PATH}/Tracks/{side_name}/{surface}Tread{tread_index:02d}", (0.105, 0.205, 0.030), (float(x_m), y_m, z_m), materials["track"])
+                add_cube(
+                    stage,
+                    f"{ROBOT_PATH}/Tracks/{side_name}/{surface}Tread{tread_index:02d}",
+                    (0.105, 0.205, 0.030),
+                    (float(x_m), y_m, z_m),
+                    materials["track"],
+                )
 
     shoulder = (-0.25, 0.46)
     elbow = (0.16, 0.73)
     wrist = (0.52, 0.39)
     tool_mount = (0.79, -0.10)
-    add_cylinder(stage, f"{ROBOT_PATH}/Arm/BaseYaw", 0.19, 0.16, (-0.25, 0.0, 0.43), materials["yellow_dark"], axis="Z")
+    add_cylinder(
+        stage,
+        f"{ROBOT_PATH}/Arm/BaseYaw",
+        0.19,
+        0.16,
+        (-0.25, 0.0, 0.43),
+        materials["yellow_dark"],
+        axis="Z",
+    )
     add_link(stage, f"{ROBOT_PATH}/Arm/Boom", shoulder, elbow, 0.0, 0.13, materials["yellow"])
     add_link(stage, f"{ROBOT_PATH}/Arm/Forearm", elbow, wrist, 0.0, 0.12, materials["steel"])
-    add_link(stage, f"{ROBOT_PATH}/Arm/WristLink", wrist, tool_mount, 0.0, 0.105, materials["steel"])
-    add_link(stage, f"{ROBOT_PATH}/Arm/HydraulicCylinderA", (-0.30, 0.34), (0.09, 0.68), 0.10, 0.052, materials["steel"])
-    add_link(stage, f"{ROBOT_PATH}/Arm/HydraulicCylinderB", (0.05, 0.65), (0.47, 0.33), -0.10, 0.045, materials["yellow_dark"])
+    add_link(
+        stage, f"{ROBOT_PATH}/Arm/WristLink", wrist, tool_mount, 0.0, 0.105, materials["steel"]
+    )
+    add_link(
+        stage,
+        f"{ROBOT_PATH}/Arm/HydraulicCylinderA",
+        (-0.30, 0.34),
+        (0.09, 0.68),
+        0.10,
+        0.052,
+        materials["steel"],
+    )
+    add_link(
+        stage,
+        f"{ROBOT_PATH}/Arm/HydraulicCylinderB",
+        (0.05, 0.65),
+        (0.47, 0.33),
+        -0.10,
+        0.045,
+        materials["yellow_dark"],
+    )
     for index, point in enumerate((shoulder, elbow, wrist, tool_mount)):
-        add_cylinder(stage, f"{ROBOT_PATH}/Arm/Joint{index}", 0.105, 0.22, (point[0], 0.0, point[1]), materials["dark_steel"], axis="Y")
+        add_cylinder(
+            stage,
+            f"{ROBOT_PATH}/Arm/Joint{index}",
+            0.105,
+            0.22,
+            (point[0], 0.0, point[1]),
+            materials["dark_steel"],
+            axis="Y",
+        )
 
     head = UsdGeom.Xform.Define(stage, f"{ROBOT_PATH}/Arm/DeconHead")
     head.AddTranslateOp().Set(Gf.Vec3d(HEAD_X_M, 0.0, -0.26))
-    add_cube(stage, f"{ROBOT_PATH}/Arm/DeconHead/Top", (0.42, 0.58, 0.075), (0.0, 0.0, 0.09), materials["steel"])
-    add_cube(stage, f"{ROBOT_PATH}/Arm/DeconHead/FrontFrame", (0.075, 0.58, 0.18), (0.17, 0.0, 0.015), materials["steel"])
-    add_cube(stage, f"{ROBOT_PATH}/Arm/DeconHead/RearFrame", (0.075, 0.58, 0.18), (-0.17, 0.0, 0.015), materials["steel"])
-    add_cube(stage, f"{ROBOT_PATH}/Arm/DeconHead/BrushFront", (0.055, 0.58, 0.10), (0.19, 0.0, -0.075), materials["brush"])
-    add_cube(stage, f"{ROBOT_PATH}/Arm/DeconHead/BrushRear", (0.055, 0.58, 0.10), (-0.19, 0.0, -0.075), materials["brush"])
-    add_cube(stage, f"{ROBOT_PATH}/Arm/DeconHead/BrushLeft", (0.34, 0.045, 0.10), (0.0, 0.29, -0.075), materials["brush"])
-    add_cube(stage, f"{ROBOT_PATH}/Arm/DeconHead/BrushRight", (0.34, 0.045, 0.10), (0.0, -0.29, -0.075), materials["brush"])
-    add_cylinder(stage, f"{ROBOT_PATH}/Arm/DeconHead/SuctionPort", 0.075, 0.13, (-0.10, 0.0, 0.17), materials["green"], axis="Z")
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/Top",
+        (0.42, 0.58, 0.075),
+        (0.0, 0.0, 0.09),
+        materials["steel"],
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/FrontFrame",
+        (0.075, 0.58, 0.18),
+        (0.17, 0.0, 0.015),
+        materials["steel"],
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/RearFrame",
+        (0.075, 0.58, 0.18),
+        (-0.17, 0.0, 0.015),
+        materials["steel"],
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/BrushFront",
+        (0.055, 0.58, 0.10),
+        (0.19, 0.0, -0.075),
+        materials["brush"],
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/BrushRear",
+        (0.055, 0.58, 0.10),
+        (-0.19, 0.0, -0.075),
+        materials["brush"],
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/BrushLeft",
+        (0.34, 0.045, 0.10),
+        (0.0, 0.29, -0.075),
+        materials["brush"],
+    )
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/BrushRight",
+        (0.34, 0.045, 0.10),
+        (0.0, -0.29, -0.075),
+        materials["brush"],
+    )
+    add_cylinder(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/SuctionPort",
+        0.075,
+        0.13,
+        (-0.10, 0.0, 0.17),
+        materials["green"],
+        axis="Z",
+    )
 
     carriage = UsdGeom.Xform.Define(stage, f"{ROBOT_PATH}/Arm/DeconHead/NozzleCarriage")
     nozzle_translate_op = carriage.AddTranslateOp()
     nozzle_translate_op.Set(Gf.Vec3d(0.0, 0.0, 0.0))
-    add_cube(stage, f"{ROBOT_PATH}/Arm/DeconHead/NozzleCarriage/RailCar", (0.12, 0.10, 0.055), (0.0, 0.0, 0.035), materials["yellow_dark"])
-    add_cylinder(stage, f"{ROBOT_PATH}/Arm/DeconHead/NozzleCarriage/Nozzle", 0.028, 0.105, (0.04, 0.0, -0.02), materials["steel"], axis="Z")
+    add_cube(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/NozzleCarriage/RailCar",
+        (0.12, 0.10, 0.055),
+        (0.0, 0.0, 0.035),
+        materials["yellow_dark"],
+    )
+    add_cylinder(
+        stage,
+        f"{ROBOT_PATH}/Arm/DeconHead/NozzleCarriage/Nozzle",
+        0.028,
+        0.105,
+        (0.04, 0.0, -0.02),
+        materials["steel"],
+        axis="Z",
+    )
     spray_prims = []
     for index, offset_y in enumerate((-0.025, 0.0, 0.025)):
-        cone = UsdGeom.Cone.Define(stage, f"{ROBOT_PATH}/Arm/DeconHead/NozzleCarriage/ContainedJet{index}")
+        cone = UsdGeom.Cone.Define(
+            stage, f"{ROBOT_PATH}/Arm/DeconHead/NozzleCarriage/ContainedJet{index}"
+        )
         cone.CreateAxisAttr("Z")
         cone.CreateRadiusAttr(0.035 + 0.008 * index)
         cone.CreateHeightAttr(0.11)
@@ -379,37 +850,91 @@ def create_robot(stage, materials, start_xyz) -> RobotVisuals:
         spray_prims.append(cone)
 
     for camera_index, y_m in enumerate((-0.18, 0.18)):
-        add_cube(stage, f"{ROBOT_PATH}/Vision/Camera{camera_index}Body", (0.14, 0.12, 0.11), (0.52, y_m, 0.54), materials["dark_steel"])
-        add_cylinder(stage, f"{ROBOT_PATH}/Vision/Camera{camera_index}Lens", 0.043, 0.035, (0.60, y_m, 0.54), materials["glass"], axis="X")
-        add_sphere(stage, f"{ROBOT_PATH}/Vision/WorkLight{camera_index}", 0.065, (0.58, y_m * 0.45, 0.38), materials["white"])
-    seal_lamp = add_sphere(stage, f"{ROBOT_PATH}/Vision/SealLamp", 0.045, (0.30, 0.0, 0.66), materials["red"])
+        add_cube(
+            stage,
+            f"{ROBOT_PATH}/Vision/Camera{camera_index}Body",
+            (0.14, 0.12, 0.11),
+            (0.52, y_m, 0.54),
+            materials["dark_steel"],
+        )
+        add_cylinder(
+            stage,
+            f"{ROBOT_PATH}/Vision/Camera{camera_index}Lens",
+            0.043,
+            0.035,
+            (0.60, y_m, 0.54),
+            materials["glass"],
+            axis="X",
+        )
+        add_sphere(
+            stage,
+            f"{ROBOT_PATH}/Vision/WorkLight{camera_index}",
+            0.065,
+            (0.58, y_m * 0.45, 0.38),
+            materials["white"],
+        )
+    seal_lamp = add_sphere(
+        stage, f"{ROBOT_PATH}/Vision/SealLamp", 0.045, (0.30, 0.0, 0.66), materials["red"]
+    )
     seal_color_attr = seal_lamp.CreateDisplayColorAttr([Gf.Vec3f(0.88, 0.04, 0.02)])
 
-    add_curve(stage, f"{ROBOT_PATH}/Hoses/HighPressure", [(-0.65, -0.16, 0.62), (-0.12, -0.16, 0.78), (0.42, -0.15, 0.44), (0.88, -0.12, -0.08)], 0.036, (0.06, 0.22, 0.72))
-    add_curve(stage, f"{ROBOT_PATH}/Hoses/Recovery", [(-0.65, 0.16, 0.58), (-0.12, 0.18, 0.74), (0.45, 0.18, 0.40), (0.86, 0.13, -0.04)], 0.058, (0.05, 0.08, 0.07))
-    add_curve(stage, f"{ROBOT_PATH}/Hoses/Control", [(-0.65, 0.05, 0.66), (-0.05, 0.05, 0.82), (0.52, 0.06, 0.38)], 0.018, (0.95, 0.34, 0.02))
+    add_curve(
+        stage,
+        f"{ROBOT_PATH}/Hoses/HighPressure",
+        [(-0.65, -0.16, 0.62), (-0.12, -0.16, 0.78), (0.42, -0.15, 0.44), (0.88, -0.12, -0.08)],
+        0.036,
+        (0.06, 0.22, 0.72),
+    )
+    add_curve(
+        stage,
+        f"{ROBOT_PATH}/Hoses/Recovery",
+        [(-0.65, 0.16, 0.58), (-0.12, 0.18, 0.74), (0.45, 0.18, 0.40), (0.86, 0.13, -0.04)],
+        0.058,
+        (0.05, 0.08, 0.07),
+    )
+    add_curve(
+        stage,
+        f"{ROBOT_PATH}/Hoses/Control",
+        [(-0.65, 0.05, 0.66), (-0.05, 0.05, 0.82), (0.52, 0.06, 0.38)],
+        0.018,
+        (0.95, 0.34, 0.02),
+    )
 
     UsdGeom.Xform.Define(stage, "/World/Utilities")
     tether_points_attrs = (
-        add_curve(stage, "/World/Utilities/Tether/Pressure", [(0.0, 0.0, 0.0)] * 5, 0.040, (0.04, 0.16, 0.60)),
-        add_curve(stage, "/World/Utilities/Tether/Recovery", [(0.0, 0.0, 0.0)] * 5, 0.064, (0.025, 0.035, 0.03)),
-        add_curve(stage, "/World/Utilities/Tether/PowerControl", [(0.0, 0.0, 0.0)] * 5, 0.020, (0.94, 0.28, 0.02)),
+        add_curve(
+            stage,
+            "/World/Utilities/Tether/Pressure",
+            [(0.0, 0.0, 0.0)] * 5,
+            0.040,
+            (0.04, 0.16, 0.60),
+        ),
+        add_curve(
+            stage,
+            "/World/Utilities/Tether/Recovery",
+            [(0.0, 0.0, 0.0)] * 5,
+            0.064,
+            (0.025, 0.035, 0.03),
+        ),
+        add_curve(
+            stage,
+            "/World/Utilities/Tether/PowerControl",
+            [(0.0, 0.0, 0.0)] * 5,
+            0.020,
+            (0.94, 0.28, 0.02),
+        ),
     )
-    return RobotVisuals(nozzle_translate_op, tuple(spray_prims), seal_color_attr, tether_points_attrs)
+    return RobotVisuals(
+        nozzle_translate_op, tuple(spray_prims), seal_color_attr, tether_points_attrs
+    )
 
 
 def activity_field(cells_x: int, cells_y: int) -> np.ndarray:
-    x = np.linspace(-1.0, 1.0, cells_x)
-    y = np.linspace(-1.0, 1.0, cells_y)
-    xx, yy = np.meshgrid(x, y, indexing="xy")
-    hotspot = 2.8 * np.exp(-((xx - 0.30) ** 2 + (yy + 0.18) ** 2) / 0.12)
-    pipe_drip = 1.4 * np.exp(-((xx + 0.48) ** 2) / 0.045) * np.exp(-((yy - 0.22) ** 2) / 0.25)
-    mottling = 0.22 * (np.sin(7.0 * xx) * np.cos(5.0 * yy) + 1.0)
-    return (115_000.0 * (1.0 + hotspot + pipe_drip + mottling)).reshape(-1)
+    return irregular_deposition_field(cells_x, cells_y)
 
 
 def create_surface_source(stage) -> tuple[SurfaceSourceGrid, list, list]:
-    cells_x, cells_y = 32, 16
+    cells_x, cells_y = 48, 28
     efficiency = np.ones(cells_x * cells_y, dtype=np.float64)
     field = efficiency.reshape(cells_y, cells_x)
     field[3:8, 17:23] = 0.52
@@ -427,19 +952,27 @@ def create_surface_source(stage) -> tuple[SurfaceSourceGrid, list, list]:
     root_prim = root.GetPrim()
     root_prim.CreateAttribute("rad:role", Sdf.ValueTypeNames.String).Set("contaminated_surface")
     root_prim.CreateAttribute("rad:source:type", Sdf.ValueTypeNames.String).Set("surface")
-    root_prim.CreateAttribute("rad:surface:coating", Sdf.ValueTypeNames.String).Set("radiation-resistant epoxy")
-    root_prim.CreateAttribute("rad:source:initialActivityBq", Sdf.ValueTypeNames.Double).Set(grid.initial_total_activity_bq)
+    root_prim.CreateAttribute("rad:surface:coating", Sdf.ValueTypeNames.String).Set(
+        "radiation-resistant epoxy"
+    )
+    root_prim.CreateAttribute("rad:source:initialActivityBq", Sdf.ValueTypeNames.Double).Set(
+        grid.initial_total_activity_bq
+    )
     color_attributes = []
     activity_attributes = []
     raw_colors = grid.color_rgb()
     epoxy = np.asarray([0.19, 0.27, 0.25])
-    colors = 0.62 * raw_colors + 0.38 * epoxy
+    # Radiation contamination is not a physical red mat. Keep this as a muted
+    # scientific overlay on the epoxy floor, with inactive grid cells hidden.
+    colors = 0.34 * raw_colors + 0.66 * epoxy
     for index, center in enumerate(grid.centers_world_m):
         cell = UsdGeom.Cube.Define(stage, f"{SOURCE_PATH}/Cell_{index:03d}")
         cell.CreateSizeAttr(1.0)
         cell.AddTranslateOp().Set(Gf.Vec3d(*center))
-        cell.AddScaleOp().Set(Gf.Vec3f(grid.cell_size_x_m * 0.985, grid.cell_size_y_m * 0.985, 0.012))
+        cell.AddScaleOp().Set(Gf.Vec3f(grid.cell_size_x_m * 1.02, grid.cell_size_y_m * 1.02, 0.004))
         color_attribute = cell.CreateDisplayColorAttr([Gf.Vec3f(*colors[index])])
+        if grid.activity_bq[index] <= 0.0:
+            cell.GetVisibilityAttr().Set(UsdGeom.Tokens.invisible)
         color_attributes.append(color_attribute)
         prim = cell.GetPrim()
         prim.CreateAttribute("rad:role", Sdf.ValueTypeNames.String).Set("source")
@@ -449,6 +982,349 @@ def create_surface_source(stage) -> tuple[SurfaceSourceGrid, list, list]:
         activity_attributes.append(activity_attr)
         prim.CreateAttribute("rad:decon:enabled", Sdf.ValueTypeNames.Bool).Set(True)
     return grid, color_attributes, activity_attributes
+
+
+def create_high_wall_surface_source(stage) -> SurfaceSourceGrid:
+    cells_x, cells_y = 48, 28
+    efficiency = np.ones(cells_x * cells_y, dtype=np.float64)
+    efficiency.reshape(cells_y, cells_x)[8:15, 20:29] = 0.48
+    grid = SurfaceSourceGrid(
+        cells_x=cells_x,
+        cells_y=cells_y,
+        size_x_m=3.2,
+        size_y_m=2.2,
+        center_world_m=(0.0, 5.724, 9.35),
+        activity_bq_per_cell=activity_field(cells_x, cells_y),
+        efficiency_field=efficiency,
+        surface_u_world=(1.0, 0.0, 0.0),
+        surface_v_world=(0.0, 0.0, 1.0),
+    )
+    root = UsdGeom.Xform.Define(stage, HIGH_WALL_SOURCE_PATH)
+    root_prim = root.GetPrim()
+    for name, value_type, value in (
+        ("rad:role", Sdf.ValueTypeNames.String, "contaminated_surface"),
+        ("rad:source:type", Sdf.ValueTypeNames.String, "surface"),
+        ("rad:source:isotopeId", Sdf.ValueTypeNames.String, "Cs-137"),
+        ("rad:source:surfaceKind", Sdf.ValueTypeNames.String, "high_wall"),
+        ("rad:decon:enabled", Sdf.ValueTypeNames.Bool, True),
+        ("rad:source:initialActivityBq", Sdf.ValueTypeNames.Double, grid.initial_total_activity_bq),
+        ("rad:source:maximumHeightM", Sdf.ValueTypeNames.Double, 10.45),
+    ):
+        root_prim.CreateAttribute(name, value_type).Set(value)
+
+    raw_colors = grid.color_rgb()
+    concrete = np.asarray([0.38, 0.40, 0.39])
+    colors = 0.38 * raw_colors + 0.62 * concrete
+    for index, center in enumerate(grid.centers_world_m):
+        if grid.activity_bq[index] <= 0.0:
+            continue
+        cell = UsdGeom.Cube.Define(stage, f"{HIGH_WALL_SOURCE_PATH}/Cell_{index:04d}")
+        cell.CreateSizeAttr(1.0)
+        cell.AddTranslateOp().Set(Gf.Vec3d(*center))
+        cell.AddScaleOp().Set(
+            Gf.Vec3f(grid.cell_size_x_m * 1.025, 0.004, grid.cell_size_y_m * 1.025)
+        )
+        cell.CreateDisplayColorAttr([Gf.Vec3f(*colors[index])])
+        prim = cell.GetPrim()
+        prim.CreateAttribute("rad:role", Sdf.ValueTypeNames.String).Set("source")
+        prim.CreateAttribute("rad:source:type", Sdf.ValueTypeNames.String).Set("surface_cell")
+        prim.CreateAttribute("rad:source:activityBq", Sdf.ValueTypeNames.Double).Set(
+            float(grid.activity_bq[index])
+        )
+        prim.CreateAttribute("rad:decon:enabled", Sdf.ValueTypeNames.Bool).Set(True)
+    return grid
+
+
+def create_high_reach_robot(stage, materials) -> dict[str, object]:
+    """Build a 10 m research high-reach decontamination mechanism.
+
+    The architecture is derived from SUPER-Giraffe's telescopic-ladder,
+    outrigger, and distal-manipulator layout, but the sixth ladder stage and
+    10 m reach envelope are RadCounterSim research extensions rather than a
+    claim about the manufacturer's 8 m machine.
+    """
+
+    root = UsdGeom.Xform.Define(stage, HIGH_REACH_ROBOT_PATH)
+    root.AddTranslateOp().Set(Gf.Vec3d(0.0, 0.70, 0.0))
+    prim = root.GetPrim()
+    for name, value_type, value in (
+        ("rad:role", Sdf.ValueTypeNames.String, "countermeasure_robot"),
+        ("rad:robot:model", Sdf.ValueTypeNames.String, "RadCounter HighReach-10"),
+        ("rad:robot:referenceArchitecture", Sdf.ValueTypeNames.String, "MHI SUPER-Giraffe"),
+        ("rad:robot:geometryFidelity", Sdf.ValueTypeNames.String, "reference_procedural"),
+        (
+            "rad:robot:driveArchitecture",
+            Sdf.ValueTypeNames.String,
+            "four_wheel_drive_four_wheel_steering",
+        ),
+        ("rad:robot:maximumReachHeightM", Sdf.ValueTypeNames.Double, 10.0),
+        ("rad:robot:telescopicStages", Sdf.ValueTypeNames.Int, 6),
+        ("rad:robot:distalManipulatorDofs", Sdf.ValueTypeNames.Int, 7),
+        ("rad:robot:stabilityInterlock", Sdf.ValueTypeNames.Bool, True),
+        ("rad:robot:transportRequiresBoomStowed", Sdf.ValueTypeNames.Bool, True),
+        ("rad:robot:driveInterlockedWithOutriggers", Sdf.ValueTypeNames.Bool, True),
+        ("rad:decon:method", Sdf.ValueTypeNames.String, "dry_ice_blast_with_suction"),
+    ):
+        prim.CreateAttribute(name, value_type).Set(value)
+
+    # A 10 m ladder cannot credibly sit on the compact cart used by the first
+    # concept render.  This is a road-mobile 4WD/4WS carrier: the ladder folds
+    # into the rear cradle for transport, and the four jacks must be retracted
+    # before the wheel drives can be enabled.
+    add_cube(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/Underbody",
+        (2.18, 3.18, 0.22),
+        (0.0, -0.10, 0.31),
+        materials["dark_steel"],
+        collision=True,
+    )
+    add_cube(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/Chassis",
+        (2.50, 3.60, 0.62),
+        (0.0, -0.10, 0.62),
+        materials["yellow_dark"],
+        collision=True,
+    )
+    add_cube(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/EquipmentDeck",
+        (2.14, 2.72, 0.34),
+        (0.0, -0.30, 1.02),
+        materials["yellow"],
+        collision=True,
+    )
+    for y_m, axle_name in ((-1.27, "Rear"), (1.20, "Front")):
+        for x_m, side_name in ((-1.27, "Left"), (1.27, "Right")):
+            name = f"{side_name}_{axle_name}"
+            wheel = add_cylinder(
+                stage,
+                f"{HIGH_REACH_ROBOT_PATH}/SteeredWheels/{name}/Tire",
+                0.46,
+                0.34,
+                (x_m, y_m, 0.47),
+                materials["track"],
+                axis="X",
+            )
+            wheel.GetPrim().CreateAttribute("rad:drive:powered", Sdf.ValueTypeNames.Bool).Set(True)
+            wheel.GetPrim().CreateAttribute("rad:drive:steered", Sdf.ValueTypeNames.Bool).Set(True)
+            add_cylinder(
+                stage,
+                f"{HIGH_REACH_ROBOT_PATH}/SteeredWheels/{name}/Hub",
+                0.18,
+                0.38,
+                (x_m, y_m, 0.47),
+                materials["steel"],
+                axis="X",
+            )
+            add_cube(
+                stage,
+                f"{HIGH_REACH_ROBOT_PATH}/SteeredWheels/{name}/SteeringKnuckle",
+                (0.18, 0.32, 0.25),
+                (math.copysign(1.05, x_m), y_m, 0.62),
+                materials["dark_steel"],
+            )
+
+    for y_m, name in ((-1.94, "Rear"), (1.74, "Front")):
+        add_cube(
+            stage,
+            f"{HIGH_REACH_ROBOT_PATH}/Bumpers/{name}",
+            (2.40, 0.16, 0.28),
+            (0.0, y_m, 0.48),
+            materials["steel"],
+            collision=True,
+        )
+
+    for x_m in (-1.78, 1.78):
+        for y_m in (-1.48, 1.48):
+            name = f"{'L' if x_m < 0.0 else 'R'}_{'Rear' if y_m < 0.0 else 'Front'}"
+            beam_start = (math.copysign(0.98, x_m), y_m, 0.62)
+            beam_end = (x_m, y_m, 0.36)
+            add_link_3d(
+                stage,
+                f"{HIGH_REACH_ROBOT_PATH}/Outriggers/{name}Beam",
+                beam_start,
+                beam_end,
+                0.14,
+                materials["steel"],
+            )
+            add_cylinder(
+                stage,
+                f"{HIGH_REACH_ROBOT_PATH}/Outriggers/{name}Jack",
+                0.11,
+                0.52,
+                (x_m, y_m, 0.30),
+                materials["dark_steel"],
+                axis="Z",
+            )
+            add_cube(
+                stage,
+                f"{HIGH_REACH_ROBOT_PATH}/Outriggers/{name}Pad",
+                (0.44, 0.44, 0.10),
+                (x_m, y_m, 0.06),
+                materials["dark_steel"],
+                collision=True,
+            )
+
+    add_cylinder(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/Turntable",
+        0.62,
+        0.30,
+        (0.0, 0.35, 1.31),
+        materials["dark_steel"],
+    )
+    add_cube(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/Counterweight",
+        (1.55, 0.90, 0.78),
+        (0.0, -0.78, 1.47),
+        materials["yellow"],
+        collision=True,
+    )
+
+    for x_m in (-0.53, 0.53):
+        add_cube(
+            stage,
+            f"{HIGH_REACH_ROBOT_PATH}/TransportCradle/Side{'L' if x_m < 0 else 'R'}",
+            (0.16, 0.22, 0.72),
+            (x_m, -1.25, 1.48),
+            materials["dark_steel"],
+        )
+    add_cube(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/TransportCradle/Saddle",
+        (1.22, 0.25, 0.18),
+        (0.0, -1.25, 1.80),
+        materials["steel"],
+    )
+
+    boom_start = np.asarray((0.0, 0.35, 1.57), dtype=np.float64)
+    boom_tip = np.asarray((0.0, 4.12, 9.40), dtype=np.float64)
+    fractions = (0.0, 0.23, 0.43, 0.61, 0.76, 0.89, 1.0)
+    widths = (0.48, 0.43, 0.38, 0.33, 0.28, 0.23)
+    for index, (low, high, width_m) in enumerate(
+        zip(fractions[:-1], fractions[1:], widths, strict=True), start=1
+    ):
+        start = boom_start + low * (boom_tip - boom_start)
+        end = boom_start + high * (boom_tip - boom_start)
+        add_link_3d(
+            stage,
+            f"{HIGH_REACH_ROBOT_PATH}/TelescopicLadder/Stage{index}",
+            start,
+            end,
+            width_m,
+            materials["yellow"] if index % 2 else materials["steel"],
+        )
+        add_cube(
+            stage,
+            f"{HIGH_REACH_ROBOT_PATH}/TelescopicLadder/Collar{index}",
+            (width_m + 0.09, width_m + 0.09, width_m + 0.09),
+            tuple(float(value) for value in end),
+            materials["dark_steel"],
+        )
+
+    arm_points = (
+        tuple(boom_tip),
+        (0.18, 4.22, 9.55),
+        (0.33, 4.34, 9.61),
+        (0.28, 4.46, 9.49),
+        (0.15, 4.58, 9.39),
+        (0.06, 4.69, 9.38),
+        (0.01, 4.79, 9.38),
+        (0.00, 4.88, 9.38),
+    )
+    for index, (start, end) in enumerate(zip(arm_points[:-1], arm_points[1:], strict=True)):
+        add_link_3d(
+            stage,
+            f"{HIGH_REACH_ROBOT_PATH}/DistalManipulator/Link{index + 1}",
+            start,
+            end,
+            0.14 - 0.008 * index,
+            materials["steel"] if index % 2 else materials["orange"],
+        )
+        add_sphere(
+            stage,
+            f"{HIGH_REACH_ROBOT_PATH}/DistalManipulator/Joint{index + 1}",
+            0.10 - 0.005 * index,
+            end,
+            materials["dark_steel"],
+        )
+
+    head_center = (0.0, 4.96, 9.38)
+    head = UsdGeom.Xform.Define(stage, f"{HIGH_REACH_ROBOT_PATH}/DeconHead")
+    head.GetPrim().CreateAttribute("rad:role", Sdf.ValueTypeNames.String).Set("decon_tool")
+    head.GetPrim().CreateAttribute("rad:decon:contactHeightM", Sdf.ValueTypeNames.Double).Set(9.38)
+    add_cube(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/DeconHead/RecoveryHousing",
+        (0.64, 0.16, 0.54),
+        head_center,
+        materials["steel"],
+    )
+    add_cube(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/DeconHead/ContainmentBrush",
+        (0.60, 0.06, 0.50),
+        (0.0, 5.07, 9.38),
+        materials["brush"],
+    )
+    add_cylinder(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/DeconHead/SuctionPort",
+        0.085,
+        0.18,
+        (0.0, 4.84, 9.38),
+        materials["green"],
+        axis="Y",
+    )
+    add_curve(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/Hoses/BlastSupply",
+        [
+            (0.38, -0.35, 0.85),
+            (0.28, 1.15, 3.0),
+            (0.20, 2.35, 5.7),
+            (0.12, 3.55, 8.0),
+            (0.08, 4.82, 9.30),
+        ],
+        0.045,
+        (0.10, 0.28, 0.72),
+    )
+    add_curve(
+        stage,
+        f"{HIGH_REACH_ROBOT_PATH}/Hoses/DustRecovery",
+        [
+            (-0.38, -0.30, 0.82),
+            (-0.30, 1.10, 2.9),
+            (-0.22, 2.30, 5.6),
+            (-0.15, 3.50, 7.9),
+            (-0.10, 4.82, 9.32),
+        ],
+        0.075,
+        (0.04, 0.05, 0.05),
+    )
+
+    return {
+        "robot_path": HIGH_REACH_ROBOT_PATH,
+        "model": "RadCounter HighReach-10",
+        "drive_architecture": "four-wheel drive / four-wheel steering",
+        "wheel_diameter_m": 0.92,
+        "chassis_dimensions_m": [2.50, 3.60, 0.62],
+        "rendered_configuration": "working: outriggers deployed, wheel drive interlocked",
+        "transport_transition": [
+            "retract distal manipulator",
+            "retract and lower telescopic ladder into transport cradle",
+            "raise four outrigger jacks",
+            "enable four wheel steering and drive",
+        ],
+        "maximum_reach_height_m": 10.0,
+        "telescopic_stages": 6,
+        "distal_manipulator_dofs": 7,
+        "reference_architecture": "MHI SUPER-Giraffe (8 m); extended research design",
+        "reference_urls": [MHI_SUPER_GIRAFFE_REFERENCE, IRID_HIGH_PLACE_REFERENCE],
+    }
 
 
 def create_work_zone(stage, materials, grid: SurfaceSourceGrid) -> None:
@@ -461,9 +1337,276 @@ def create_work_zone(stage, materials, grid: SurfaceSourceGrid) -> None:
         ("West", (0.055, grid.size_y_m + 0.14, 0.025), (cx - half_x - 0.06, cy, 0.026)),
         ("East", (0.055, grid.size_y_m + 0.14, 0.025), (cx + half_x + 0.06, cy, 0.026)),
     ):
-        add_cube(stage, f"/World/ReactorBuilding/WorkZone/{name}", size, position, materials["orange"])
+        add_cube(
+            stage, f"/World/ReactorBuilding/WorkZone/{name}", size, position, materials["orange"]
+        )
     for index, x_m in enumerate(np.linspace(cx - half_x, cx + half_x, 8)):
-        add_cube(stage, f"/World/ReactorBuilding/WorkZone/SurveyMark{index}", (0.025, 0.16, 0.02), (float(x_m), cy + half_y + 0.18, 0.022), materials["white"])
+        add_cube(
+            stage,
+            f"/World/ReactorBuilding/WorkZone/SurveyMark{index}",
+            (0.025, 0.16, 0.02),
+            (float(x_m), cy + half_y + 0.18, 0.022),
+            materials["white"],
+        )
+
+
+def create_irregular_cylindrical_surface_source(
+    stage,
+    path: str,
+    *,
+    center_world_m: tuple[float, float, float],
+    radius_m: float,
+    height_m: float,
+    total_activity_bq: float,
+) -> dict[str, object]:
+    """Create a sparse face-activity field conforming to a cylindrical object."""
+
+    angular_cells = 48
+    vertical_cells = 24
+    angles = np.linspace(-math.pi, math.pi, angular_cells, endpoint=False)
+    heights = np.linspace(-1.0, 1.0, vertical_cells)
+    theta, zz = np.meshgrid(angles, heights, indexing="xy")
+
+    def wrapped_delta(value, center):
+        return np.angle(np.exp(1j * (value - center)))
+
+    field = (
+        2.5 * np.exp(-(wrapped_delta(theta, -2.45) ** 2 / 0.48 + (zz - 0.18) ** 2 / 0.22))
+        + 1.7 * np.exp(-(wrapped_delta(theta, -1.75) ** 2 / 0.24 + (zz + 0.38) ** 2 / 0.12))
+        + 1.1 * np.exp(-(wrapped_delta(theta, 2.85) ** 2 / 0.14 + (zz - 0.62) ** 2 / 0.08))
+    )
+    roughness = 0.22 * np.sin(7.0 * theta + 4.0 * zz) + 0.17 * np.cos(13.0 * zz - 2.0 * theta)
+    active = field + roughness > 0.62
+    active &= ~((wrapped_delta(theta, -2.30) / 0.22) ** 2 + ((zz + 0.02) / 0.16) ** 2 < 1.0)
+    active |= (wrapped_delta(theta, -0.95) ** 2 + (zz - 0.52) ** 2 < 0.025) | (
+        wrapped_delta(theta, 2.15) ** 2 + (zz + 0.55) ** 2 < 0.018
+    )
+
+    weights = np.where(active, np.maximum(0.1, field + 0.45 * roughness), 0.0)
+    weights /= max(float(weights.sum()), 1e-12)
+    face_activity = total_activity_bq * weights
+    points: list[Gf.Vec3f] = []
+    counts: list[int] = []
+    indices: list[int] = []
+    activities: list[float] = []
+    colors: list[Gf.Vec3f] = []
+    center_x, center_y, center_z = center_world_m
+    delta_theta = 2.0 * math.pi / angular_cells
+    delta_z = height_m / (vertical_cells - 1)
+    visual_radius = radius_m + 0.004
+    maximum = max(float(face_activity.max()), 1e-12)
+    for row, column in np.argwhere(active):
+        theta_center = float(theta[row, column])
+        z_center = center_z + 0.5 * height_m * float(zz[row, column])
+        theta_low = theta_center - 0.52 * delta_theta
+        theta_high = theta_center + 0.52 * delta_theta
+        z_low = z_center - 0.52 * delta_z
+        z_high = z_center + 0.52 * delta_z
+        base_index = len(points)
+        for angle, z_m in (
+            (theta_low, z_low),
+            (theta_high, z_low),
+            (theta_high, z_high),
+            (theta_low, z_high),
+        ):
+            points.append(
+                Gf.Vec3f(
+                    center_x + visual_radius * math.cos(angle),
+                    center_y + visual_radius * math.sin(angle),
+                    z_m,
+                )
+            )
+        counts.append(4)
+        indices.extend((base_index, base_index + 1, base_index + 2, base_index + 3))
+        activity = float(face_activity[row, column])
+        activities.append(activity)
+        fraction = activity / maximum
+        colors.append(Gf.Vec3f(0.34 + 0.46 * fraction, 0.07 + 0.10 * fraction, 0.025))
+
+    mesh = UsdGeom.Mesh.Define(stage, path)
+    mesh.CreatePointsAttr(points)
+    mesh.CreateFaceVertexCountsAttr(counts)
+    mesh.CreateFaceVertexIndicesAttr(indices)
+    mesh.CreateSubdivisionSchemeAttr("none")
+    color_primvar = mesh.CreateDisplayColorPrimvar(UsdGeom.Tokens.uniform)
+    color_primvar.Set(colors)
+    mesh_prim = mesh.GetPrim()
+    for name, value_type, value in (
+        ("rad:role", Sdf.ValueTypeNames.String, "source"),
+        ("rad:source:type", Sdf.ValueTypeNames.String, "surface"),
+        ("rad:source:isotopeId", Sdf.ValueTypeNames.String, "Cs-137"),
+        ("rad:source:activityBq", Sdf.ValueTypeNames.Double, total_activity_bq),
+        ("rad:source:surfaceKind", Sdf.ValueTypeNames.String, "adhered_cylindrical_patch"),
+        ("rad:source:faceActivityBq", Sdf.ValueTypeNames.DoubleArray, activities),
+        ("rad:source:irregularMask", Sdf.ValueTypeNames.Bool, True),
+        ("rad:decon:enabled", Sdf.ValueTypeNames.Bool, True),
+    ):
+        mesh_prim.CreateAttribute(name, value_type).Set(value)
+    return {
+        "path": path,
+        "active_faces": len(activities),
+        "candidate_faces": angular_cells * vertical_cells,
+        "total_activity_bq": total_activity_bq,
+    }
+
+
+def create_shield_manipulation_scene(stage, materials) -> dict[str, object]:
+    """Author an isolated, reactor-building shield-handling research scene."""
+
+    from isaacsim.storage.native import get_assets_root_path
+
+    assets_root = get_assets_root_path()
+    if not assets_root:
+        raise RuntimeError("Isaac Sim assets root is unavailable")
+
+    UsdGeom.Xform.Define(stage, "/World/ShieldManipulation")
+    robot = UsdGeom.Xform.Define(stage, MANIPULATOR_PATH)
+    robot.GetPrim().GetReferences().AddReference(assets_root + RIDGEBACK_FRANKA_ASSET)
+    robot_prim = robot.GetPrim()
+    robot_prim.CreateAttribute("rad:role", Sdf.ValueTypeNames.String).Set("countermeasure_robot")
+    robot_prim.CreateAttribute("rad:robot:model", Sdf.ValueTypeNames.String).Set(
+        "Clearpath Ridgeback + Franka Emika Panda"
+    )
+    robot_prim.CreateAttribute("rad:robot:geometryFidelity", Sdf.ValueTypeNames.String).Set(
+        "manufacturer_asset"
+    )
+    robot_prim.CreateAttribute("rad:robot:controller", Sdf.ValueTypeNames.String).Set(
+        "holonomic base + seven-axis arm IK + parallel gripper"
+    )
+
+    shield = UsdGeom.Xform.Define(stage, SHIELD_PATH)
+    shield.AddTranslateOp().Set(Gf.Vec3d(0.78, -0.62, 0.0))
+    shield_prim = shield.GetPrim()
+    UsdPhysics.RigidBodyAPI.Apply(shield_prim).CreateRigidBodyEnabledAttr(True)
+    UsdPhysics.MassAPI.Apply(shield_prim).CreateMassAttr(2.8)
+    for name, value_type, value in (
+        ("rad:role", Sdf.ValueTypeNames.String, "shield"),
+        ("rad:material:id", Sdf.ValueTypeNames.String, "tungsten_composite"),
+        ("rad:material:mode", Sdf.ValueTypeNames.String, "solid"),
+        ("rad:shield:movable", Sdf.ValueTypeNames.Bool, True),
+        ("rad:shield:massKg", Sdf.ValueTypeNames.Double, 2.8),
+        ("rad:manipulation:movable", Sdf.ValueTypeNames.Bool, True),
+        ("rad:manipulation:graspFrame", Sdf.ValueTypeNames.String, "GraspFrame"),
+    ):
+        shield_prim.CreateAttribute(name, value_type).Set(value)
+
+    add_cube(
+        stage,
+        f"{SHIELD_PATH}/BaseFoot",
+        (0.30, 0.52, 0.065),
+        (0.0, 0.0, 0.035),
+        materials["dark_steel"],
+        collision=True,
+    )
+    core = add_cube(
+        stage,
+        f"{SHIELD_PATH}/TungstenCore",
+        (0.025, 0.42, 0.62),
+        (0.0, 0.0, 0.37),
+        materials["lead"],
+        collision=True,
+    )
+    core.GetPrim().CreateAttribute("rad:material:id", Sdf.ValueTypeNames.String).Set(
+        "tungsten_composite"
+    )
+    for side_name, x_m in (("RobotSide", -0.020), ("SourceSide", 0.020)):
+        add_cube(
+            stage,
+            f"{SHIELD_PATH}/Jacket{side_name}",
+            (0.012, 0.46, 0.66),
+            (x_m, 0.0, 0.37),
+            materials["shield_skin"],
+            collision=True,
+        )
+    for y_m in (-0.235, 0.235):
+        add_cube(
+            stage,
+            f"{SHIELD_PATH}/Edge_{'L' if y_m > 0.0 else 'R'}",
+            (0.060, 0.025, 0.68),
+            (0.0, y_m, 0.37),
+            materials["yellow_dark"],
+        )
+    for y_m in (-0.10, 0.10):
+        add_cube(
+            stage,
+            f"{SHIELD_PATH}/HandleStand_{'L' if y_m > 0.0 else 'R'}",
+            (0.12, 0.025, 0.025),
+            (-0.075, y_m, 0.54),
+            materials["orange"],
+        )
+    add_cube(
+        stage,
+        f"{SHIELD_PATH}/Handle",
+        (0.025, 0.23, 0.030),
+        (-0.14, 0.0, 0.54),
+        materials["orange"],
+    )
+    grasp = UsdGeom.Xform.Define(stage, f"{SHIELD_PATH}/GraspFrame")
+    grasp.AddTranslateOp().Set(Gf.Vec3d(-0.14, 0.0, 0.54))
+
+    # A corroded process-pipe spool carries an adhered, spatially varying
+    # surface source. The object itself is not a homogeneous volume source.
+    source_path = "/World/ShieldManipulation/ContaminatedValveSpool"
+    source = UsdGeom.Xform.Define(stage, source_path)
+    source_prim = source.GetPrim()
+    source_prim.CreateAttribute("rad:role", Sdf.ValueTypeNames.String).Set("contaminated_object")
+    source_prim.CreateAttribute("rad:manipulation:movable", Sdf.ValueTypeNames.Bool).Set(True)
+    add_cylinder(
+        stage,
+        f"{source_path}/VerticalPipe",
+        0.20,
+        0.88,
+        (1.95, -0.62, 0.46),
+        materials["pipe"],
+        collision=True,
+    )
+    for z_m in (0.10, 0.80):
+        add_cylinder(
+            stage,
+            f"{source_path}/Flange_{int(z_m * 100):02d}",
+            0.31,
+            0.10,
+            (1.95, -0.62, z_m),
+            materials["dark_steel"],
+            collision=True,
+        )
+    add_cylinder(
+        stage,
+        f"{source_path}/BranchPipe",
+        0.13,
+        0.72,
+        (1.62, -0.62, 0.56),
+        materials["pipe"],
+        axis="X",
+        collision=True,
+    )
+    add_cylinder(
+        stage,
+        f"{source_path}/ValveBody",
+        0.23,
+        0.28,
+        (1.30, -0.62, 0.56),
+        materials["corrosion"],
+        axis="X",
+        collision=True,
+    )
+    surface_source = create_irregular_cylindrical_surface_source(
+        stage,
+        f"{source_path}/AdheredSurfaceContamination",
+        center_world_m=(1.95, -0.62, 0.46),
+        radius_m=0.20,
+        height_m=0.76,
+        total_activity_bq=8.5e8,
+    )
+
+    return {
+        "robot_asset": assets_root + RIDGEBACK_FRANKA_ASSET,
+        "robot_path": MANIPULATOR_PATH,
+        "shield_path": SHIELD_PATH,
+        "contaminated_object_path": source_path,
+        "surface_source": surface_source,
+        "shield_mass_kg": 2.8,
+    }
 
 
 def build_route(grid: SurfaceSourceGrid) -> tuple[tuple[float, float, float], list[RouteSegment]]:
@@ -478,18 +1621,36 @@ def build_route(grid: SurfaceSourceGrid) -> tuple[tuple[float, float, float], li
     segments: list[RouteSegment] = []
     for row_index, row in enumerate(rows):
         if row_index % 2 == 0:
-            segments.append(RouteSegment((forward_end_x, float(row)), True, f"sealed wash lane {row_index + 1}"))
+            segments.append(
+                RouteSegment((forward_end_x, float(row)), True, f"sealed wash lane {row_index + 1}")
+            )
             if row_index + 1 < len(rows):
-                segments.append(RouteSegment((reverse_start_x, float(rows[row_index + 1])), False, "head closed / reposition"))
+                segments.append(
+                    RouteSegment(
+                        (reverse_start_x, float(rows[row_index + 1])),
+                        False,
+                        "head closed / reposition",
+                    )
+                )
         else:
-            segments.append(RouteSegment((reverse_end_x, float(row)), True, f"sealed wash lane {row_index + 1}"))
+            segments.append(
+                RouteSegment((reverse_end_x, float(row)), True, f"sealed wash lane {row_index + 1}")
+            )
             if row_index + 1 < len(rows):
-                segments.append(RouteSegment((forward_start_x, float(rows[row_index + 1])), False, "head closed / reposition"))
+                segments.append(
+                    RouteSegment(
+                        (forward_start_x, float(rows[row_index + 1])),
+                        False,
+                        "head closed / reposition",
+                    )
+                )
     return start, segments
 
 
 def transform_and_pose(stage) -> tuple[Gf.Matrix4d, tuple[float, float, float], float]:
-    transform = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT_PATH)).ComputeLocalToWorldTransform(Usd.TimeCode.Default())
+    transform = UsdGeom.Xformable(stage.GetPrimAtPath(ROBOT_PATH)).ComputeLocalToWorldTransform(
+        Usd.TimeCode.Default()
+    )
     position = transform.ExtractTranslation()
     x_axis = transform.TransformDir(Gf.Vec3d(1.0, 0.0, 0.0)).GetNormalized()
     yaw = math.atan2(x_axis[1], x_axis[0])
@@ -598,21 +1759,33 @@ class ArounderWindow:
 
     def update(self, grid, auto, sealed, state, physical_elapsed_s, pressure_mpa) -> None:
         self.status.text = f"Phase: {auto.phase}"
-        self.seal.text = "Head seal: CLOSED | jet + vacuum ON" if sealed else "Head seal: OPEN | jet interlocked"
+        self.seal.text = (
+            "Head seal: CLOSED | jet + vacuum ON" if sealed else "Head seal: OPEN | jet interlocked"
+        )
         self.process.text = f"Process: {pressure_mpa:.0f} MPa | 450 mm internal nozzle scan"
         self.activity.text = f"Surface activity: {grid.total_activity_bq:,.0f} Bq"
         df = grid.initial_total_activity_bq / max(grid.total_activity_bq, 1e-12)
         self.df.text = f"Decontamination factor: {df:.2f}"
         self.treated.text = f"Treated area: {grid.treated_fraction * 100.0:.1f}%"
-        self.route.text = f"Route segment: {min(auto.index + 1, len(auto.route))} / {len(auto.route)}"
-        self.water.text = f"Water: {state.applied_water_l:.1f} L supplied / {state.recovered_water_l:.1f} L recovered"
+        self.route.text = (
+            f"Route segment: {min(auto.index + 1, len(auto.route))} / {len(auto.route)}"
+        )
+        self.water.text = (
+            f"Water: {state.applied_water_l:.1f} L supplied / "
+            f"{state.recovered_water_l:.1f} L recovered"
+        )
         recovery = state.recovered_water_l / max(state.applied_water_l, 1e-12) * 100.0
-        self.recovery.text = f"Recovery: {recovery:.1f}% | discharge: {state.discharged_water_l:.1f} L"
+        self.recovery.text = (
+            f"Recovery: {recovery:.1f}% | discharge: {state.discharged_water_l:.1f} L"
+        )
         self.waste.text = f"Captured activity: {state.captured_activity_bq:,.0f} Bq"
         hours = int(physical_elapsed_s // 3600)
         minutes = int((physical_elapsed_s % 3600) // 60)
         seconds = int(physical_elapsed_s % 60)
-        self.clock.text = f"Plant operation time: {hours:02d}:{minutes:02d}:{seconds:02d} ({ARGS.time_scale:.0f}x view)"
+        self.clock.text = (
+            f"Plant operation time: {hours:02d}:{minutes:02d}:{seconds:02d} "
+            f"({ARGS.time_scale:.0f}x view)"
+        )
         self.progress_model.set_value(float(min(grid.removed_fraction, 1.0)))
 
 
@@ -669,14 +1842,18 @@ def update_process_visuals(visuals: RobotVisuals, scan_y_m: float, sealed: bool)
     visibility = UsdGeom.Tokens.inherited if sealed else UsdGeom.Tokens.invisible
     for cone in visuals.spray_prims:
         cone.GetVisibilityAttr().Set(visibility)
-    visuals.seal_color_attr.Set([Gf.Vec3f(0.04, 0.86, 0.18) if sealed else Gf.Vec3f(0.88, 0.04, 0.02)])
+    visuals.seal_color_attr.Set(
+        [Gf.Vec3f(0.04, 0.86, 0.18) if sealed else Gf.Vec3f(0.88, 0.04, 0.02)]
+    )
 
 
 def update_surface_visuals(grid, water_process, color_attributes, activity_attributes) -> None:
     colors = water_process.visual_color_rgb()
     epoxy = np.asarray([0.19, 0.27, 0.25])
-    colors = 0.68 * colors + 0.32 * epoxy
-    for index, (color_attr, activity_attr) in enumerate(zip(color_attributes, activity_attributes, strict=True)):
+    colors = 0.40 * colors + 0.60 * epoxy
+    for index, (color_attr, activity_attr) in enumerate(
+        zip(color_attributes, activity_attributes, strict=True)
+    ):
         color_attr.Set([Gf.Vec3f(*colors[index])])
         activity_attr.Set(float(grid.activity_bq[index]))
 
@@ -689,10 +1866,253 @@ def request_capture(path: Path) -> None:
     viewport_utility.capture_viewport_to_file(viewport, str(path))
 
 
+def _set_link_geometry(stage, path: str, start_xyz, end_xyz, width_m: float) -> None:
+    start = np.asarray(start_xyz, dtype=np.float64)
+    end = np.asarray(end_xyz, dtype=np.float64)
+    delta = end - start
+    length = float(np.linalg.norm(delta))
+    if length <= 1e-9:
+        raise ValueError("animated link endpoints must be distinct")
+    horizontal = math.hypot(float(delta[0]), float(delta[1]))
+    rotation = Gf.Vec3f(
+        0.0,
+        -math.degrees(math.atan2(float(delta[2]), horizontal)),
+        math.degrees(math.atan2(float(delta[1]), float(delta[0]))),
+    )
+    xformable = UsdGeom.Xformable(stage.GetPrimAtPath(path))
+    operations = xformable.GetOrderedXformOps()
+    if len(operations) != 3:
+        raise RuntimeError(f"expected translate/rotate/scale operations on {path}")
+    operations[0].Set(Gf.Vec3d(*(0.5 * (start + end))))
+    operations[1].Set(rotation)
+    operations[2].Set(Gf.Vec3f(length, width_m, width_m))
+
+
+def _solve_fabrik_chain(base_xyz, target_xyz, lengths_m: tuple[float, ...]) -> np.ndarray:
+    """Solve a small fixed-length serial chain for the rendered distal arm."""
+
+    base = np.asarray(base_xyz, dtype=np.float64)
+    target = np.asarray(target_xyz, dtype=np.float64)
+    reach = float(sum(lengths_m))
+    separation = float(np.linalg.norm(target - base))
+    if separation >= reach:
+        direction = (target - base) / max(separation, 1e-12)
+        points = [base]
+        for length_m in lengths_m:
+            points.append(points[-1] + length_m * direction)
+        return np.asarray(points)
+
+    interpolation = np.linspace(0.0, 1.0, len(lengths_m) + 1)[:, None]
+    bend = np.asarray((0.20, -0.10, 0.34), dtype=np.float64)
+    points = base + interpolation * (target - base)
+    points += np.sin(math.pi * interpolation) * bend
+    points[0] = base
+    points[-1] = target
+    for _ in range(24):
+        points[-1] = target
+        for index in range(len(lengths_m) - 1, -1, -1):
+            delta = points[index] - points[index + 1]
+            distance = float(np.linalg.norm(delta))
+            points[index] = points[index + 1] + lengths_m[index] * delta / max(distance, 1e-12)
+        points[0] = base
+        for index, length_m in enumerate(lengths_m):
+            delta = points[index + 1] - points[index]
+            distance = float(np.linalg.norm(delta))
+            points[index + 1] = points[index] + length_m * delta / max(distance, 1e-12)
+        if float(np.linalg.norm(points[-1] - target)) <= 1e-5:
+            break
+    return points
+
+
+def _animate_high_reach_arm(stage, target_local_xyz: tuple[float, float, float]) -> None:
+    base = (0.0, 4.12, 9.40)
+    lengths = (0.30, 0.28, 0.26, 0.24, 0.22, 0.20, 0.18)
+    points = _solve_fabrik_chain(base, target_local_xyz, lengths)
+    for index, (start, end) in enumerate(zip(points[:-1], points[1:], strict=True), start=1):
+        _set_link_geometry(
+            stage,
+            f"{HIGH_REACH_ROBOT_PATH}/DistalManipulator/Link{index}",
+            start,
+            end,
+            0.148 - 0.008 * index,
+        )
+        joint = UsdGeom.Xformable(
+            stage.GetPrimAtPath(f"{HIGH_REACH_ROBOT_PATH}/DistalManipulator/Joint{index}")
+        )
+        joint.GetOrderedXformOps()[0].Set(Gf.Vec3d(*end))
+
+    head = UsdGeom.Xformable(stage.GetPrimAtPath(f"{HIGH_REACH_ROBOT_PATH}/DeconHead"))
+    operations = head.GetOrderedXformOps()
+    translate = operations[0] if operations else head.AddTranslateOp()
+    initial = np.asarray((0.0, 4.96, 9.38), dtype=np.float64)
+    translate.Set(Gf.Vec3d(*(np.asarray(target_local_xyz) - initial)))
+
+
+def _high_reach_scan_target(video_time_s: float, duration_s: float) -> tuple[float, float, float]:
+    lead_s = min(1.5, duration_s * 0.10)
+    tail_s = min(2.0, duration_s * 0.12)
+    scan_duration_s = max(duration_s - lead_s - tail_s, 1e-6)
+    if video_time_s < lead_s:
+        progress = 0.0
+    elif video_time_s >= duration_s - tail_s:
+        progress = 1.0
+    else:
+        progress = (video_time_s - lead_s) / scan_duration_s
+    rows = 6
+    row_position = min(progress, 1.0 - 1e-9) * rows
+    row = min(int(row_position), rows - 1)
+    phase = row_position - row
+    if row % 2:
+        phase = 1.0 - phase
+    x_m = -1.05 + 2.10 * phase
+    z_m = 8.70 + row * (1.32 / (rows - 1))
+    return (x_m, 4.96, z_m)
+
+
+def _update_high_wall_visuals(stage, grid: SurfaceSourceGrid) -> None:
+    concrete = np.asarray([0.38, 0.40, 0.39])
+    fraction = np.divide(
+        grid.activity_bq,
+        grid.initial_activity_bq,
+        out=np.zeros_like(grid.activity_bq),
+        where=grid.initial_activity_bq > 0.0,
+    )
+    overlay_colors = 0.38 * grid.color_rgb() + 0.62 * concrete
+    colors = concrete + fraction[:, None] * (overlay_colors - concrete)
+    for index in np.flatnonzero(grid.initial_activity_bq > 0.0):
+        prim = stage.GetPrimAtPath(f"{HIGH_WALL_SOURCE_PATH}/Cell_{index:04d}")
+        if not prim.IsValid():
+            continue
+        UsdGeom.Imageable(prim).GetVisibilityAttr().Set(
+            UsdGeom.Tokens.invisible if fraction[index] < 0.10 else UsdGeom.Tokens.inherited
+        )
+        UsdGeom.Gprim(prim).GetDisplayColorAttr().Set([Gf.Vec3f(*colors[index])])
+        prim.GetAttribute("rad:source:activityBq").Set(float(grid.activity_bq[index]))
+
+
+def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGrid) -> dict:
+    duration_s = float(ARGS.video_seconds)
+    fps = int(ARGS.video_fps)
+    frame_count = int(round(duration_s * fps))
+    frame_dir = ARGS.output / ".high_reach_video_frames"
+    frame_dir.mkdir(parents=True, exist_ok=True)
+    for stale_frame in frame_dir.glob("frame_*.png"):
+        stale_frame.unlink()
+    video_path = ARGS.output / "high_reach_wall_decontamination_20s.mp4"
+    video_path.unlink(missing_ok=True)
+
+    set_camera_view(
+        eye=np.asarray([-7.25, -12.8, 7.35]),
+        target=np.asarray([0.0, 3.55, 5.50]),
+        camera_prim_path="/OmniverseKit_Persp",
+    )
+    for _ in range(90):
+        world.step(render=True)
+
+    tool = DecontaminationTool(
+        length_m=0.72,
+        width_m=0.58,
+        rate_constant_s_inv=0.48,
+        max_contact_distance_m=0.09,
+        max_surface_speed_m_s=3.0,
+    )
+    initial_activity_bq = grid.total_activity_bq
+    previous_target = np.asarray(_high_reach_scan_target(0.0, duration_s), dtype=np.float64)
+    active_start_s = min(1.5, duration_s * 0.10)
+    active_end_s = duration_s - min(2.0, duration_s * 0.12)
+    for frame_index in range(frame_count):
+        video_time_s = frame_index / fps
+        target_local = np.asarray(
+            _high_reach_scan_target(video_time_s, duration_s), dtype=np.float64
+        )
+        _animate_high_reach_arm(stage, tuple(float(value) for value in target_local))
+        if active_start_s <= video_time_s < active_end_s:
+            speed_m_s = float(np.linalg.norm(target_local - previous_target) * fps)
+            grid.apply_tool(
+                tool,
+                tool_center_world_m=(
+                    float(target_local[0]),
+                    float(target_local[1] + 0.70),
+                    float(target_local[2]),
+                ),
+                tool_yaw_rad=0.0,
+                surface_speed_m_s=speed_m_s,
+                dt_s=5.0 / fps,
+            )
+            _update_high_wall_visuals(stage, grid)
+        previous_target = target_local
+        world.step(render=True)
+        request_capture(frame_dir / f"frame_{frame_index:04d}.png")
+        world.step(render=True)
+        if frame_index % fps == 0:
+            print(
+                f"HIGH_REACH_VIDEO t={video_time_s:.1f}s "
+                f"removed={grid.removed_fraction * 100.0:.1f}%",
+                flush=True,
+            )
+
+    for _ in range(30):
+        world.step(render=True)
+    capture_deadline = time.monotonic() + 5.0
+    rendered_frames = len(list(frame_dir.glob("frame_*.png")))
+    while rendered_frames < frame_count and time.monotonic() < capture_deadline:
+        world.step(render=True)
+        time.sleep(0.02)
+        rendered_frames = len(list(frame_dir.glob("frame_*.png")))
+    if rendered_frames != frame_count:
+        raise RuntimeError(f"expected {frame_count} video frames, found {rendered_frames}")
+    subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-framerate",
+            str(fps),
+            "-i",
+            str(frame_dir / "frame_%04d.png"),
+            "-vf",
+            "crop=1440:810:0:45,scale=1280:720,format=yuv420p",
+            "-r",
+            "30",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "slow",
+            "-crf",
+            "18",
+            "-movflags",
+            "+faststart",
+            str(video_path),
+        ],
+        check=True,
+    )
+    for rendered_frame in frame_dir.glob("frame_*.png"):
+        rendered_frame.unlink()
+    frame_dir.rmdir()
+    return {
+        "passed": True,
+        "video": str(video_path),
+        "duration_s": duration_s,
+        "capture_fps": fps,
+        "encoded_fps": 30,
+        "resolution": [1280, 720],
+        "frames": frame_count,
+        "initial_activity_bq": initial_activity_bq,
+        "final_activity_bq": grid.total_activity_bq,
+        "removed_fraction": grid.removed_fraction,
+        "surface_source": HIGH_WALL_SOURCE_PATH,
+        "decontamination_model": "contact-footprint cumulative-exposure decay",
+    }
+
+
 def main() -> int:
     ARGS.output.mkdir(parents=True, exist_ok=True)
-    result_path = ARGS.output / "result.json"
+    result_path = ARGS.output / ("video_result.json" if ARGS.render_video else "result.json")
     before_path = ARGS.output / "before.png"
+    tool_detail_path = ARGS.output / "decontamination_head_detail.png"
+    high_reach_path = ARGS.output / "high_reach_decontamination.png"
+    shield_manipulator_path = ARGS.output / "shield_manipulator.png"
     during_path = ARGS.output / "during.png"
     after_path = ARGS.output / "after.png"
     result: dict[str, object] = {"passed": False}
@@ -702,15 +2122,88 @@ def main() -> int:
         world = World(stage_units_in_meters=1.0, physics_dt=DT_S, rendering_dt=DT_S)
         stage = omni.usd.get_context().get_stage()
         materials = create_materials(stage)
-        roller_points = create_environment(stage, materials)
-        grid, color_attributes, activity_attributes = create_surface_source(stage)
-        create_work_zone(stage, materials, grid)
-        start_xyz, route = build_route(grid)
-        visuals = create_robot(stage, materials, start_xyz)
+        high_reach_render = ARGS.render_video or (
+            ARGS.render_only and ARGS.render_scene == "decontamination"
+        )
+        roller_points = create_environment(stage, materials, high_bay=high_reach_render)
 
         dome = UsdLux.DomeLight.Define(stage, "/World/ReactorBuilding/Ambient")
         dome.CreateIntensityAttr(340.0)
         dome.CreateColorAttr(Gf.Vec3f(0.56, 0.66, 0.76))
+
+        if high_reach_render:
+            grid = create_high_wall_surface_source(stage)
+            robot_manifest = create_high_reach_robot(stage, materials)
+            world.reset()
+            if ARGS.render_video:
+                video_result = render_high_reach_decontamination_video(world, stage, grid)
+                result = {
+                    **video_result,
+                    "scene": "13 m reactor-building high-wall decontamination",
+                    "reference_robot": "RadCounter HighReach-10 research design",
+                    **robot_manifest,
+                }
+                print("HIGH_REACH_VIDEO_RESULT " + json.dumps(result), flush=True)
+                return 0
+            set_camera_view(
+                eye=np.asarray([-8.0, -15.2, 7.1]),
+                target=np.asarray([0.0, 3.00, 4.85]),
+                camera_prim_path="/OmniverseKit_Persp",
+            )
+            for _ in range(120):
+                world.step(render=True)
+            request_capture(high_reach_path)
+            for _ in range(30):
+                world.step(render=True)
+            result = {
+                "passed": True,
+                "render_only": True,
+                "scene": "13 m reactor-building high-bay decontamination",
+                "reference_robot": "RadCounter HighReach-10 research design",
+                "design_disclosure": (
+                    "six-stage 10 m research extension of the documented 8 m "
+                    "MHI SUPER-Giraffe architecture"
+                ),
+                **robot_manifest,
+                "surface_source": HIGH_WALL_SOURCE_PATH,
+                "surface_orientation": "vertical wall",
+                "active_surface_cells": int(np.count_nonzero(grid.activity_bq)),
+                "maximum_contamination_height_m": 10.45,
+                "image": str(high_reach_path),
+            }
+            print("HIGH_REACH_RENDER_RESULT " + json.dumps(result), flush=True)
+            return 0
+
+        if ARGS.render_scene == "shield-manipulation":
+            if not ARGS.render_only:
+                raise ValueError("shield-manipulation is a render-only scene")
+            scene_manifest = create_shield_manipulation_scene(stage, materials)
+            world.reset()
+            set_camera_view(
+                eye=np.asarray([4.35, -5.35, 2.65]),
+                target=np.asarray([0.70, -0.55, 0.57]),
+                camera_prim_path="/OmniverseKit_Persp",
+            )
+            for _ in range(150):
+                world.step(render=True)
+            request_capture(shield_manipulator_path)
+            for _ in range(30):
+                world.step(render=True)
+            result = {
+                "passed": True,
+                "render_only": True,
+                "scene": "reactor-building manipulator shield placement",
+                "reference_robot": "Clearpath Ridgeback + Franka Emika Panda",
+                "reference_urls": [RIDGEBACK_FRANKA_REFERENCE],
+                **scene_manifest,
+                "image": str(shield_manipulator_path),
+            }
+            print("SHIELD_MANIPULATOR_RENDER_RESULT " + json.dumps(result), flush=True)
+            return 0
+
+        grid, color_attributes, activity_attributes = create_surface_source(stage)
+        start_xyz, route = build_route(grid)
+        visuals = create_robot(stage, materials, start_xyz)
 
         world.reset()
         controller = RigidArounderController(stage)
@@ -721,7 +2214,9 @@ def main() -> int:
 
         pressure_mpa, _coefficient = operation_parameters(ARGS.operation_mode)
         panel = ArounderWindow(grid.initial_total_activity_bq, pressure_mpa)
-        water_state = WaterDecontaminationState(supply_remaining_l=1000.0, wastewater_capacity_l=1000.0)
+        water_state = WaterDecontaminationState(
+            supply_remaining_l=1000.0, wastewater_capacity_l=1000.0
+        )
         water_process = WaterSurfaceDecontaminator(
             grid,
             water_state,
@@ -749,6 +2244,47 @@ def main() -> int:
         for _ in range(20):
             world.step(render=True)
 
+        set_camera_view(
+            eye=np.asarray([-0.10, -2.30, 1.55]),
+            target=np.asarray([-1.12, -0.58, 0.20]),
+            camera_prim_path="/OmniverseKit_Persp",
+        )
+        for _ in range(35):
+            world.step(render=True)
+        request_capture(tool_detail_path)
+        for _ in range(20):
+            world.step(render=True)
+
+        if ARGS.render_only:
+            result = {
+                "passed": True,
+                "render_only": True,
+                "reference_robot": (
+                    "Hitachi-GE / IRID Arounder low-section high-pressure-water "
+                    "decontamination machine"
+                ),
+                "reference_urls": [HITACHI_REFERENCE, IRID_REFERENCE],
+                "scene": "reactor-building floor decontamination",
+                "surface_source": SOURCE_PATH,
+                "surface_cells": len(grid.activity_bq),
+                "active_surface_cells": int(np.count_nonzero(grid.activity_bq)),
+                "surface_shape": "irregular spill/runoff field with detached droplets",
+                "rectangular_work_zone_frame": False,
+                "initial_activity_bq": grid.initial_total_activity_bq,
+                "overview_image": str(before_path),
+                "decontamination_head_detail_image": str(tool_detail_path),
+            }
+            print("AROUNDER_RENDER_RESULT " + json.dumps(result), flush=True)
+            return 0
+
+        set_camera_view(
+            eye=np.asarray([6.8, -7.6, 5.15]),
+            target=np.asarray([0.15, 0.15, 0.48]),
+            camera_prim_path="/OmniverseKit_Persp",
+        )
+        for _ in range(20):
+            world.step(render=True)
+
         initial_activity = grid.total_activity_bq
         start_position = transform_and_pose(stage)[1]
         previous_position = start_position
@@ -773,7 +2309,9 @@ def main() -> int:
             path_length_m += frame_distance
             scan_phase = 2.0 * math.pi * 0.52 * elapsed
             scan_y_m = 0.5 * HEAD_STROKE_M * math.sin(scan_phase)
-            scan_visual_speed_m_s = abs(0.5 * HEAD_STROKE_M * 2.0 * math.pi * 0.52 * math.cos(scan_phase))
+            scan_visual_speed_m_s = abs(
+                0.5 * HEAD_STROKE_M * 2.0 * math.pi * 0.52 * math.cos(scan_phase)
+            )
             brush_point = transform.Transform(Gf.Vec3d(HEAD_X_M, scan_y_m, HEAD_BRUSH_Z_M))
             seal_gap_m = abs(float(brush_point[2]) - float(grid.center_world_m[2]))
             sealed = auto.water_requested and seal_gap_m <= 0.055
@@ -827,9 +2365,11 @@ def main() -> int:
                 print(
                     f"AROUNDER_TELEMETRY t={elapsed:.1f} plant_t={physical_elapsed_s:.0f} "
                     f"phase={auto.phase!r} seal={sealed} pressure_mpa={pressure_mpa:.0f} "
-                    f"activity_bq={grid.total_activity_bq:.0f} df={initial_activity / max(grid.total_activity_bq, 1e-12):.2f} "
+                    f"activity_bq={grid.total_activity_bq:.0f} "
+                    f"df={initial_activity / max(grid.total_activity_bq, 1e-12):.2f} "
                     f"treated_pct={grid.treated_fraction * 100.0:.1f} path_m={path_length_m:.2f} "
-                    f"water_l={water_state.applied_water_l:.1f} recovery_pct={recovery * 100.0:.1f}",
+                    f"water_l={water_state.applied_water_l:.1f} "
+                    f"recovery_pct={recovery * 100.0:.1f}",
                     flush=True,
                 )
             frame_index += 1
@@ -859,7 +2399,9 @@ def main() -> int:
         )
         result = {
             "passed": passed,
-            "reference_robot": "Hitachi-GE / IRID Arounder low-section high-pressure-water decontamination machine",
+            "reference_robot": (
+                "Hitachi-GE / IRID Arounder low-section high-pressure-water decontamination machine"
+            ),
             "reference_urls": [HITACHI_REFERENCE, IRID_REFERENCE],
             "isaac_sim_target": "6.0.1",
             "operation_mode": ARGS.operation_mode,

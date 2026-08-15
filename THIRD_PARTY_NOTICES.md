@@ -27,5 +27,35 @@ this repository unless a file explicitly states otherwise.
 - Python packages resolved by `uv.lock`: governed by each package's metadata
   and license files.
 
+## Optional packaged local-inference components
+
+Release packages may include these independently licensed components under
+`runtime/llm`. They are not stored in this Git repository.
+
+- llama.cpp, including `llama-server`: MIT License,
+  https://github.com/ggml-org/llama.cpp
+- Qwen3-4B and its official GGUF quantization: Apache License 2.0,
+  https://huggingface.co/Qwen/Qwen3-4B-GGUF
+
+The release packaging process pins and verifies both inputs. Their copyright,
+license, and notice files must accompany redistributed binaries and models.
+
+## Optional Fukushima Daiichi CAD environment
+
+The system catalog can fetch and import the independently distributed
+`Qualot/fukushima_daiichi_solidworks` generic Fukushima Daiichi CAD model.
+Neither its SolidWorks source nor derived USD assets are stored in this Git
+repository.
+
+- Project: https://github.com/Qualot/fukushima_daiichi_solidworks
+- Pinned integration revision: `f6541deb6159c5d908a4f028d021e3d2c9f7f8e8`
+- License: Creative Commons Attribution 4.0 International (CC BY 4.0)
+- Attribution: Qualot/fukushima_daiichi_solidworks contributors
+
+The fetch and Linux conversion scripts preserve source revision, license,
+attribution, converter metadata, and SHA-256 provenance. Anyone redistributing
+a derived USD, render, or other adaptation is responsible for retaining the CC BY 4.0
+attribution and indicating modifications.
+
 Users are responsible for reviewing and accepting the terms of external
 software before installing or running it.

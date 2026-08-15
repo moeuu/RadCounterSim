@@ -8,7 +8,9 @@
 3. Invoke an injected estimator with `tuple[PublicMeasurement, ...]`.
 4. Generate candidates from the live USD scene and the returned `BeliefState`.
 5. Preview the selected action from belief strengths and public geometry only.
-6. Execute the action through `IsaacPhysicsRobotController` or contact decontamination.
+6. Execute manufacturer-asset workflows through `RidgebackFrankaController`
+   and `NovaCarterController`; the generic rigid-body controller remains
+   available only for portable/custom-robot integrations.
 7. Synchronize the actual USD pose/activity state into Embree.
 8. Re-measure, calculate a public residual, and invoke an injected belief updater.
 
@@ -25,11 +27,14 @@ This keeps simulator Truth inaccessible to estimator and planner APIs.
 - obstacle-aware shield placements;
 - movable-object relocation and disposal actions.
 
-Each candidate includes checks for mobile path clearance, manipulator workspace or
-configured IK, placement collision, grasp-frame availability, support stability,
-disposal-class compatibility, robot availability, and mission resources. Dose terms
-are computed from `BeliefState.source_strength_bq`, public source sample positions,
-and Embree transmission. Runtime source activity is never read for planner metrics.
+Each candidate includes checks for mobile path clearance, the articulated base
+pose, horizontal and vertical manipulator reach, pickup and placement grasp-frame
+poses, placement collision, support stability, disposal-class compatibility,
+robot availability, and mission resources. Object-root poses and grasp-frame
+offsets are tracked separately, including their rotation when the mobile base
+changes yaw. Dose terms are computed from `BeliefState.source_strength_bq`, public
+source sample positions, and Embree transmission. Runtime source activity is never
+read for planner metrics.
 
 ## Physics-step lifecycle
 
@@ -59,3 +64,13 @@ uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked python tests/isaac/workflow_g
 The gate requires a physical shield displacement, an actual PhysX callback, initial
 and verification detector integrations, a planner decision, and no Truth field in the
 injected estimator input.
+
+Run the complete articulated GUI path headlessly with:
+
+```bash
+uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked python scripts/run_gui_validation.py \
+  --headless --no-keep-open --phase-hold-s 0
+```
+
+That gate requires all eight operations and all final invariants to pass without
+operation-time pose teleports.

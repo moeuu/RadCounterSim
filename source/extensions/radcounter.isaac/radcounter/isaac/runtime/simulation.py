@@ -145,6 +145,22 @@ class _CachedRayPaths:
     path_lengths: FloatArray
 
 
+def _ensure_material_columns(paths: FloatArray, material_count: int) -> FloatArray:
+    """Pad native path lengths for configured materials absent from the current stage."""
+
+    values = np.asarray(paths, dtype=np.float64)
+    if values.ndim != 2:
+        raise ValueError("native path lengths must be a two-dimensional array")
+    if values.shape[1] > material_count:
+        raise ValueError(
+            f"native scene returned {values.shape[1]} material columns for "
+            f"{material_count} configured materials"
+        )
+    if values.shape[1] == material_count:
+        return values
+    return np.pad(values, ((0, 0), (0, material_count - values.shape[1])))
+
+
 class NativeStageTransport:
     """Mirror attenuation geometry from USD into the native Embree scene."""
 
@@ -404,6 +420,7 @@ class NativeStageTransport:
         paths = self._trace_paths(origins, targets)
         if paths.ndim == 1:
             paths = paths.reshape(len(origins), -1)
+        paths = _ensure_material_columns(paths, len(self._material_ids))
         self._ray_cache[key] = _CachedRayPaths(origins.copy(), targets.copy(), paths)
         while len(self._ray_cache) > 4096:
             self._ray_cache.pop(next(iter(self._ray_cache)))

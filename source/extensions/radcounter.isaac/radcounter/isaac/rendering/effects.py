@@ -35,9 +35,7 @@ class FacilityEffectsAuthor:
         )
         settings.set_bool("/rtx/raytracing/fog/enabled", fog_enabled)
         settings.set_float("/rtx/raytracing/fog/density", self.config.fog_density)
-        settings.set_float_array(
-            "/rtx/raytracing/fog/color", list(self.config.fog_color_rgb)
-        )
+        settings.set_float_array("/rtx/raytracing/fog/color", list(self.config.fog_color_rgb))
         dust_count = int(self.config.dust_particle_count * self.budget.effect_particle_scale)
         if dust_count:
             low = np.asarray(self.config.bounds_min_m)
@@ -130,7 +128,9 @@ class FacilityEffectsAuthor:
         for index in range(len(values) - 1):
             start = index * 2
             faces.extend((start, start + 1, start + 3, start + 2))
-        path = f"{self.root_path}/WetTraces/trace_{len(values)}_{abs(hash(values.tobytes())) % 100000}"
+        path = (
+            f"{self.root_path}/WetTraces/trace_{len(values)}_{abs(hash(values.tobytes())) % 100000}"
+        )
         mesh = UsdGeom.Mesh.Define(self.stage, path)
         mesh.CreatePointsAttr([Gf.Vec3f(*value) for value in vertices])
         mesh.CreateFaceVertexCountsAttr([4] * (len(values) - 1))

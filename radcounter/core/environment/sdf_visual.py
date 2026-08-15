@@ -8,9 +8,9 @@ mesh scale, or the metal/roughness texture set.
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-import xml.etree.ElementTree as ET
 
 
 @dataclass(frozen=True)
@@ -111,9 +111,9 @@ def load_sdf_visual_model(path: str | Path) -> SdfVisualModel:
 
             metal = visual.find("material/pbr/metal")
 
-            def texture(tag: str) -> Path | None:
+            def texture(tag: str, material: ET.Element | None = metal) -> Path | None:
                 resolved = _resolve_uri(
-                    metal.findtext(tag) if metal is not None else None,
+                    material.findtext(tag) if material is not None else None,
                     model_root,
                     model_name,
                 )
