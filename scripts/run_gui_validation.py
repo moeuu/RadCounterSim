@@ -100,6 +100,12 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--detector-set")
     parser.add_argument("--selection-file", type=Path)
     parser.add_argument(
+        "--robot-monitor-smoke-test",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="exercise follow, onboard, work, overview, and manual-cancel camera modes",
+    )
+    parser.add_argument(
         "--decontamination-smoke-test",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -1432,6 +1438,81 @@ def _run_complex_natural_language_validation(
     return payload
 
 
+def _monitor_update(app: Any) -> None:
+    for _ in range(4):
+        app.update()
+    time.sleep(0.10)
+    app.update()
+
+
+def _exercise_robot_monitor(app: Any, dashboard: Any) -> dict[str, object]:
+    """Exercise camera state without authoring a second rendered viewport."""
+
+    from pxr import Gf
+
+    monitor = dashboard._robot_monitor
+    if not monitor.robots:
+        raise RuntimeError("robot monitor smoke test requires at least one catalog robot")
+    robot_id = monitor.robots[0].robot_id
+
+    monitor.follow_robot(robot_id)
+    _monitor_update(app)
+    follow = monitor.audit()
+    if follow["camera_mode"] != "follow":
+        raise RuntimeError(f"follow camera did not activate: {follow}")
+
+    monitor.onboard_robot(robot_id)
+    _monitor_update(app)
+    onboard = monitor.audit()
+    if onboard["camera_mode"] != "onboard":
+        raise RuntimeError(f"onboard camera did not activate: {onboard}")
+
+    monitor.begin_operation(
+        robot_id=robot_id,
+        operation="除染",
+        phase="navigating",
+        route_m=((0.0, 0.0, 0.0), (1.0, 0.5, 0.0)),
+        target_m=(1.0, 0.5, 1.0),
+        target_path="/World/RobotMonitorSmokeTarget",
+        auto_work_view=True,
+    )
+    _monitor_update(app)
+    monitor.update_countermeasure_progress(
+        {
+            "phase": "decontaminating",
+            "progress": 0.63,
+            "coverage_fraction": 0.57,
+        }
+    )
+    _monitor_update(app)
+    work = monitor.audit()
+    if work["camera_mode"] != "work" or not math.isclose(work["progress"], 0.63):
+        raise RuntimeError(f"work camera/progress did not activate: {work}")
+
+    camera_op = monitor._camera_op
+    if camera_op is None or camera_op.Get() is None:
+        raise RuntimeError("operator camera did not author a transform")
+    camera_op.Set(Gf.Matrix4d(1.0))
+    _monitor_update(app)
+    manual_cancel = monitor.audit()
+    if manual_cancel["camera_mode"] != "free":
+        raise RuntimeError(f"manual camera edit did not cancel tracking: {manual_cancel}")
+
+    monitor.overview()
+    _monitor_update(app)
+    overview = monitor.audit()
+    if overview["camera_mode"] != "overview":
+        raise RuntimeError(f"overview camera did not activate: {overview}")
+    monitor.stop_follow(manual=False)
+    return {
+        "follow": follow,
+        "onboard": onboard,
+        "work": work,
+        "manual_cancel": manual_cancel,
+        "overview": overview,
+    }
+
+
 def _run_configurable_system(
     app: Any,
     args: argparse.Namespace,
@@ -1474,6 +1555,9 @@ def _run_configurable_system(
         selection=selection,
     )
     panel.update("Selected system is ready", 3, 3, composed.profile_manifest)
+    robot_monitor_validation = (
+        _exercise_robot_monitor(app, dashboard) if args.robot_monitor_smoke_test else None
+    )
     if args.interactive:
         panel.hide()
     return {
@@ -1489,6 +1573,8 @@ def _run_configurable_system(
         "rebased_asset_paths": composed.rebased_asset_paths,
         "source_count": len(simulation.sources),
         "detector_count": len(simulation.detectors),
+        "robot_monitor": dashboard.robot_monitor_audit(),
+        "robot_monitor_validation": robot_monitor_validation,
         "note": (
             "The configurable session composes selected assets without adding the "
             "vertical-slice-only decontamination task layout."
@@ -1503,6 +1589,12 @@ def _run_validation(
     dashboard: Any,
 ) -> dict:
     selection = _selected_system(args)
+    if args.decontamination_smoke_test and selection.robot_set.kind != "decommissioning":
+        raise RuntimeError(
+            "--decontamination-smoke-test requires the explicit central-catalog "
+            "robot set 'articulated-decommissioning'; do not inject an unselected "
+            "task robot into the operator roster"
+        )
     if selection.configurable and not args.decontamination_smoke_test:
         return _run_configurable_system(app, args, panel, dashboard, selection)
 
@@ -1648,6 +1740,8 @@ def _run_validation(
         config=robot_config,
         articulation=carter_articulation,
     )
+    countermeasure_controller.progress_callback = dashboard.update_countermeasure_progress
+    measurement_controller.progress_callback = dashboard.update_navigation_progress
     if args.decontamination_smoke_test:
         assert ground_primary is not None and ground_secondary is not None
         measurement_controller.set_initial_pose(ground_secondary.translation_m)
@@ -1671,8 +1765,6 @@ def _run_validation(
         # Keep later operator-triggered physics motion observable instead of
         # advancing hundreds of rendered steps as fast as the GPU allows.
         stepper.frame_delay_s = max(stepper.frame_delay_s, 1.0 / 120.0)
-    measurement_controller.progress_callback = dashboard.update_navigation_progress
-
     simulation = IsaacRadiationSimulation.from_config(
         stage,
         ROOT / "configs/scenarios/vertical_slice.runtime.json",
@@ -1788,7 +1880,16 @@ def _run_validation(
             1,
             _jsonable(candidate.feasibility),
         )
-        result = _complete(services.execute(action))
+        dashboard._robot_monitor.begin_action(action)
+        try:
+            result = _complete(services.execute(action))
+        except Exception:
+            dashboard._robot_monitor.finish_action(success=False)
+            raise
+        dashboard._robot_monitor.finish_action(
+            success=True,
+            public_details=result.public_details,
+        )
         activity_after = _activity_total(activity_path)
         robot_after = _world_position(stage, robot_config.countermeasure_root)
         public_details = dict(result.public_details)
@@ -1838,6 +1939,7 @@ def _run_validation(
             "arm_joint_excursion_rad": countermeasure_controller.arm_joint_excursion_rad,
             "transport_geometries": len(simulation.transport.geometry_paths),
             "result": _jsonable(result.public_view()),
+            "robot_monitor": dashboard.robot_monitor_audit(),
             "invariants": invariants,
             "failed_invariants": failed,
         }
@@ -2269,6 +2371,7 @@ def _run_validation(
         "transport_statistics": simulation.transport.statistics,
         "controller_trace": countermeasure_controller.trace,
         "measurement_controller_trace": measurement_controller.trace,
+        "robot_monitor": dashboard.robot_monitor_audit(),
     }
 
 

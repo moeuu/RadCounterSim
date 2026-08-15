@@ -80,6 +80,10 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     assert "SetTargets([Sdf.Path(self.config.panda_hand_path)])" in controller
     assert "def execute_surface_decontamination" in controller
     assert "progress_callback" in controller
+    assert "OperationProgressCallback" in controller
+    assert 'phase="decontaminating"' in controller
+    assert "coverage_fraction=(" in controller
+    assert "path_m=planned_path" in controller
     assert "def return_home" in controller
     assert "def navigate_route" in controller
     assert "initial_distance_m / 0.25 * 60.0" in controller
@@ -105,6 +109,9 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     assert "continuous boustrophedon/serpentine raster" in rules
     assert "Sample the full physical pad footprint densely enough" in rules
     assert "ray count is spatial sampling density, not elapsed time" in rules
+    assert "planned sweep" in rules
+    assert "same irregular activity-bearing mesh" in rules
+    assert "Never show a regular rectangular coverage proxy" in rules
     assert "np.linspace(-0.085, 0.085, 9)" in source
 
     contact_model = (

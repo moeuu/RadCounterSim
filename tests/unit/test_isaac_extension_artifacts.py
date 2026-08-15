@@ -9,6 +9,9 @@ def test_isaac_extension_declares_direct_host_dependencies() -> None:
     assert config["python"]["module"][0]["name"] == "radcounter.isaac"
     assert set(config["dependencies"]) == {
         "omni.kit.uiapp",
+        "omni.ui.scene",
+        "omni.kit.viewport.utility",
+        "omni.kit.viewport.window",
         "omni.appwindow",
         "omni.usd",
         "omni.timeline",

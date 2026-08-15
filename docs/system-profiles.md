@@ -21,6 +21,11 @@ configuration and is intentionally separate. It accepts natural-language robot
 workflow instructions only; environment, robot-set, and detector-set switching
 always uses the explicit controls below it.
 
+The robot list immediately above the LLM section is rebuilt from the selected
+robot-set catalog entry. Its **見る** and **搭載** controls, the active-robot bar,
+and the building overview therefore follow the same explicit configuration;
+see `robot-monitoring.md`.
+
 Each environment catalog entry also owns named `spawn_anchors`. Robot sets refer
 to semantic anchors such as `ground-primary` or `aerial-primary` instead of
 assuming one world coordinate works in every CAD. The environment also provides

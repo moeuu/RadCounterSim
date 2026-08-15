@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -21,6 +21,7 @@ FrameCallback = Callable[[float, int], None]
 NavigationProgressCallback = Callable[
     [int, tuple[float, float, float], tuple[float, float], float], None
 ]
+OperationProgressCallback = Callable[[Mapping[str, object]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -1807,6 +1808,7 @@ class RidgebackFrankaController:
         *,
         config: RealRobotAssetConfig | None = None,
         articulation: Any | None = None,
+        progress_callback: OperationProgressCallback | None = None,
     ) -> None:
         from isaacsim.core.prims import SingleArticulation
         from isaacsim.robot_motion.motion_generation import (
@@ -1853,6 +1855,7 @@ class RidgebackFrankaController:
         ].copy()
         self.last_base_motion_steps = 0
         self.trace: list[str] = ["idle"]
+        self.progress_callback = progress_callback
 
     @staticmethod
     def _smoothstep(value: float) -> float:
@@ -1876,6 +1879,11 @@ class RidgebackFrankaController:
 
     def _transition(self, state: str) -> None:
         self.trace.append(state)
+        self._emit_progress(phase=state)
+
+    def _emit_progress(self, **event: object) -> None:
+        if self.progress_callback is not None:
+            self.progress_callback(event)
 
     def _step(self, callback: FrameCallback | None, frame: int) -> None:
         self.stepper.step(render=True)
@@ -1917,6 +1925,12 @@ class RidgebackFrankaController:
                 ArticulationAction(joint_positions=command, joint_indices=indices)
             )
             self._step(None, frame)
+            if frame == 1 or frame % 6 == 0 or frame == interpolation_steps:
+                self._emit_progress(
+                    phase="navigating",
+                    progress=float(frame / interpolation_steps),
+                    target_m=tuple(map(float, target)),
+                )
         for frame in range(1, settle_steps + 1):
             self.last_base_motion_steps += 1
             self.controller.apply_action(
@@ -1925,6 +1939,11 @@ class RidgebackFrankaController:
             self._step(None, interpolation_steps + frame)
             if np.linalg.norm(self._positions()[indices] - target) <= tolerance:
                 self.last_base_positions = self._positions()[indices].copy()
+                self._emit_progress(
+                    phase="navigating",
+                    progress=1.0,
+                    target_m=tuple(map(float, target)),
+                )
                 return True
         self.last_base_positions = self._positions()[indices].copy()
         return False
@@ -1972,6 +1991,11 @@ class RidgebackFrankaController:
             return ArticulatedTaskReport(
                 "failed", False, 0, "articulated base route is empty", phases=()
             )
+        self._emit_progress(
+            phase="navigating",
+            progress=0.0,
+            path_m=tuple(tuple(map(float, point[:3])) for point in route),
+        )
         for index, waypoint in enumerate(route):
             yaw = final_yaw_rad if index == len(route) - 1 else None
             result = self.navigate_to(waypoint, yaw)
@@ -2181,6 +2205,16 @@ class RidgebackFrankaController:
     ) -> DecontaminationMotionReport:
         if not hand_waypoints_m:
             raise ValueError("at least one decontamination waypoint is required")
+        planned_path = tuple(
+            tuple(map(float, waypoint[:3])) for waypoint in hand_waypoints_m
+        )
+        self._emit_progress(
+            phase="approaching",
+            progress=0.0,
+            coverage_fraction=0.0,
+            path_m=planned_path,
+            target_m=planned_path[0],
+        )
         self.set_decon_tool_visible(True)
         activity_before = float(np.sum(decontaminator.activity_bq))
         first = np.asarray(hand_waypoints_m[0], dtype=np.float64)
@@ -2204,6 +2238,8 @@ class RidgebackFrankaController:
                 (approach_result.position_error_m,),
                 0.0,
             )
+        self._transition("contact_confirmed")
+        self._transition("decontaminating")
         accepted = 0
         rejected = 0
         removed = 0.0
@@ -2264,6 +2300,15 @@ class RidgebackFrankaController:
             self.hold(dwell_frames, treatment_tick)
             if author_trace_patches and accepted > contact_before:
                 self._clean_trace_patch(index)
+            self._emit_progress(
+                phase="decontaminating",
+                progress=float((index + 1) / len(hand_waypoints_m)),
+                coverage_fraction=(
+                    len(triangles) / max(len(decontaminator.triangle_indices), 1)
+                ),
+                accepted_contacts=accepted,
+                target_m=planned_path[index],
+            )
         retreat = np.asarray(hand_waypoints_m[-1], dtype=np.float64) + np.asarray(
             retreat_offset_m, dtype=np.float64
         )
@@ -2381,7 +2426,13 @@ class RidgebackFrankaController:
                 for x in (x_values if row % 2 == 0 else x_values[::-1])
             )
         dwell_frames = max(6, int(round(max(duration_s, 0.1) * 60.0 / len(waypoints))))
-        self._transition("decontaminating")
+        self._transition("approaching")
+        self._emit_progress(
+            phase="approaching",
+            progress=0.0,
+            path_m=tuple(tuple(map(float, waypoint)) for waypoint in waypoints),
+            target_m=tuple(map(float, waypoints[0])),
+        )
         report = self.execute_decontamination(
             decontaminator,
             waypoints,

@@ -7,6 +7,9 @@ keywords = ["isaac", "radiation", "robotics", "countermeasure"]
 
 [dependencies]
 "omni.kit.uiapp" = {}
+"omni.ui.scene" = {}
+"omni.kit.viewport.utility" = {}
+"omni.kit.viewport.window" = {}
 "omni.appwindow" = {}
 "omni.usd" = {}
 "omni.timeline" = {}

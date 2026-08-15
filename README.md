@@ -100,6 +100,13 @@ The visible GUI is capped at 60 FPS by default to avoid consuming a full GPU
 while idle. Override it with `--max-fps 30`, or use `--max-fps 0` to remove the
 cap.
 
+The viewport keeps one active robot explicit in a top status bar and provides
+one-click follow/onboard views, a 12 FPS building overview, through-wall robot
+beacons, routes, targets, measurement locations, and contact-derived
+decontamination progress. Only the main viewport is rendered; selecting an
+onboard view switches that viewport instead of rendering every robot camera.
+See `docs/robot-monitoring.md`.
+
 ## Local natural-language application
 
 The interactive application accepts Japanese and English instructions, maps

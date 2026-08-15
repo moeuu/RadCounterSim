@@ -32,6 +32,7 @@ from radcounter.core.system_profiles import (
 )
 
 from ..runtime.simulation import IsaacRadiationSimulation, measurement_payload
+from .robot_monitor import RobotMonitorOverlay
 
 
 def _bound_label(
@@ -114,6 +115,9 @@ class RadCounterDashboard:
             self,
             audit_path=self.root / "artifacts/ui/natural_language_commands.jsonl",
         )
+        self._robot_monitor = RobotMonitorOverlay(ext_id)
+        self._robot_monitor.set_robot_list_changed_callback(self._rebuild_robot_list)
+        self._robot_monitor.configure(self._active_system_selection)
         self._window = ui.Window(
             "RadCounterSim Operations",
             width=540,
@@ -130,12 +134,20 @@ class RadCounterDashboard:
         return properties
 
     def _build(self) -> None:
+        with ui.ScrollingFrame(
+            horizontal_scrollbar_policy=ui.ScrollBarPolicy.SCROLLBAR_ALWAYS_OFF,
+        ):
+            self._build_content()
+
+    def _build_content(self) -> None:
         with ui.VStack(spacing=10, height=0):
             ui.Label("RADCOUNTER / OPERATIONS", style={"font_size": 18, "color": 0xFFE3B341})
             ui.Label(
                 "Measurement -> intervention -> verification",
                 style={"font_size": 12, "color": 0xFF9FA6AD},
             )
+            ui.Separator(height=4)
+            self._build_robot_monitor_controls()
             ui.Separator(height=4)
             ui.Label(
                 "NATURAL LANGUAGE COMMAND / ROBOT LLM",
@@ -279,6 +291,73 @@ class RadCounterDashboard:
                 word_wrap=True,
                 style={"font_size": 11, "color": 0xFFDD7A6B},
             )
+
+    def _build_robot_monitor_controls(self) -> None:
+        ui.Label(
+            "ROBOT MONITOR / ロボット監視",
+            style={"font_size": 11, "color": 0xFF6CB6FF},
+        )
+        ui.Label(
+            "「見る」で追従、「搭載」でロボット視点。カメラを手動操作すると追従を解除します。",
+            word_wrap=True,
+            style=self._operator_style(font_size=12, color=0xFFB8BDC3),
+        )
+        with ui.HStack(height=30, spacing=8):
+            ui.Button("建屋俯瞰", clicked_fn=self._robot_monitor.overview)
+            ui.Button(
+                "追従解除 / Free",
+                clicked_fn=self._robot_monitor.stop_follow,
+            )
+        self._robot_list_frame = ui.Frame(height=0)
+        self._robot_list_frame.set_build_fn(self._build_robot_rows)
+
+    def _build_robot_rows(self) -> None:
+        robots = self._robot_monitor.robots
+        if not robots:
+            ui.Label(
+                "現在の構成にロボットはありません。",
+                style=self._operator_style(font_size=12, color=0xFF8E989F),
+            )
+            return
+        with ui.VStack(spacing=4, height=0):
+            for robot in robots:
+                active = robot.robot_id == self._robot_monitor.active_robot_id
+                with ui.HStack(height=30, spacing=6):
+                    ui.Rectangle(
+                        width=5,
+                        style={
+                            "background_color": (
+                                0xFFF4BD55 if active else 0xFF48545C
+                            )
+                        },
+                    )
+                    ui.Label(
+                        ("● " if active else "○ ") + robot.display_name,
+                        width=250,
+                        style=self._operator_style(
+                            font_size=12,
+                            color=0xFFF4E2B9 if active else 0xFFD2D8DC,
+                        ),
+                    )
+                    ui.Button(
+                        "見る",
+                        width=84,
+                        clicked_fn=lambda robot_id=robot.robot_id: (
+                            self._robot_monitor.follow_robot(robot_id)
+                        ),
+                    )
+                    ui.Button(
+                        "搭載",
+                        width=84,
+                        clicked_fn=lambda robot_id=robot.robot_id: (
+                            self._robot_monitor.onboard_robot(robot_id)
+                        ),
+                    )
+
+    def _rebuild_robot_list(self) -> None:
+        frame = getattr(self, "_robot_list_frame", None)
+        if frame is not None:
+            frame.rebuild()
 
     @staticmethod
     def _choice_index(values: tuple[str, ...], selected: str) -> int:
@@ -568,6 +647,8 @@ class RadCounterDashboard:
                 detector_set_id=selection.detector_set_id,
             )
             self._sync_system_controls(selection)
+            if not selection.configurable:
+                self._robot_monitor.configure(selection)
             self._status.set_value(f"構成を適用しました: {selection.profile.display_name}")
         except Exception as exc:
             self._status.set_value(f"構成の適用に失敗しました: {type(exc).__name__}: {exc}")
@@ -609,6 +690,7 @@ class RadCounterDashboard:
         self._status.set_value(f"Loaded {display_name}.")
         if selection is not None:
             self._sync_system_controls(selection)
+            self._robot_monitor.configure(selection)
 
     @staticmethod
     def _format_command_plan(submission) -> str:
@@ -713,6 +795,19 @@ class RadCounterDashboard:
             f"目標 ({target_xy_m[0]:.2f}, {target_xy_m[1]:.2f}) · "
             f"残り {remaining_m:.2f} m"
         )
+        self._robot_monitor.update_navigation_progress(
+            position_m=position_m,
+            target_xy_m=target_xy_m,
+            remaining_m=remaining_m,
+        )
+
+    def update_countermeasure_progress(self, event: Mapping[str, object]) -> None:
+        """Forward physical countermeasure phases to the viewport monitor."""
+
+        self._robot_monitor.update_countermeasure_progress(event)
+
+    def robot_monitor_audit(self) -> dict[str, object]:
+        return self._robot_monitor.audit()
 
     def _submit_natural_language(self) -> None:
         raw_instruction = self._command_input.get_value_as_string()
@@ -1207,17 +1302,26 @@ class RadCounterDashboard:
         action = candidate.action
         if action.action_type == ActionType.MEASURE:
             self._navigation_status_prefix = "測定地点へ移動中"
-        prediction = services.preview(action, belief)
-        result = self._complete_immediate(services.execute(action))
-        if result.status not in {ActionStatus.COMPLETED, ActionStatus.PARTIAL}:
-            raise RuntimeError(f"{candidate_id} failed: {result.public_details}")
-        diagnosis = None
-        if action.action_type != ActionType.MEASURE:
-            verification = self._complete_immediate(services.verify(action))
-            diagnosis = services.diagnose(prediction, verification)
-            belief = services.update(belief, diagnosis)
-            self._workflow_belief = belief
-        self.set_workflow_view(services.workflow_view())
+        self._robot_monitor.begin_action(action)
+        try:
+            prediction = services.preview(action, belief)
+            result = self._complete_immediate(services.execute(action))
+            if result.status not in {ActionStatus.COMPLETED, ActionStatus.PARTIAL}:
+                raise RuntimeError(f"{candidate_id} failed: {result.public_details}")
+            diagnosis = None
+            if action.action_type != ActionType.MEASURE:
+                verification = self._complete_immediate(services.verify(action))
+                diagnosis = services.diagnose(prediction, verification)
+                belief = services.update(belief, diagnosis)
+                self._workflow_belief = belief
+            self.set_workflow_view(services.workflow_view())
+        except Exception:
+            self._robot_monitor.finish_action(success=False)
+            raise
+        self._robot_monitor.finish_action(
+            success=True,
+            public_details=result.public_details,
+        )
         return {
             "command": CommandName.EXECUTE_CANDIDATE.value,
             "action_id": candidate_id,
@@ -1233,9 +1337,20 @@ class RadCounterDashboard:
         if controller is None:
             raise RuntimeError("measurement robot controller is not initialized")
         self._navigation_status_prefix = "測定ロボットが開始位置へ帰還中"
-        report = controller.return_home()
+        self._robot_monitor.begin_operation(
+            robot_id="measurement",
+            operation="開始位置へ帰還",
+            phase="returning_home",
+        )
+        try:
+            report = controller.return_home()
+        except Exception:
+            self._robot_monitor.finish_action(success=False)
+            raise
         if not report.success:
+            self._robot_monitor.finish_action(success=False)
             raise RuntimeError(report.message)
+        self._robot_monitor.finish_action(success=True)
         return {
             "command": CommandName.RETURN_MEASUREMENT_ROBOT.value,
             "status": "completed",
@@ -1347,6 +1462,7 @@ class RadCounterDashboard:
             future.cancel()
         self._physical_command_queue.clear()
         self._natural_language.shutdown()
+        self._robot_monitor.destroy()
         self._workflow_services = None
         self._workflow_belief = None
         self._command_candidates.clear()

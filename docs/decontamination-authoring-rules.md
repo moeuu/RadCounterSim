@@ -100,6 +100,26 @@ truth.
    unmet threshold at the attempt limit must be reported to the operator rather
    than silently presented as success.
 
+## Operator monitoring visualization
+
+1. The viewport may draw a planned base route, the physical tool's planned
+   raster centerline, a target marker, robot beacons, and detector measurement
+   positions as operator guidance. These overlays are annotations only and must
+   never be used as collision, contact, activity, coverage, or success geometry.
+2. Planned and treated decontamination areas must remain visibly distinct. The
+   path is the planned sweep; the treated result is the live per-face fade on
+   the same irregular activity-bearing mesh accepted by contact validation.
+   Never show a regular rectangular coverage proxy, hidden or visible, in place
+   of those real faces.
+3. Coverage and progress shown in the operator bar must come from controller
+   events and the contact report. `coverage_fraction` remains the fraction of
+   actual active irregular faces treated, not the fraction of a raster bounding
+   rectangle traversed.
+4. The automatic work camera may frame both tool and surface, but it must not
+   modify surface geometry, collision, activity, waypoint reachability, contact
+   thresholds, or treatment results. It switches once when the controller
+   enters the treatment phase; operator camera input cancels automatic tracking.
+
 ## Complex validation environment
 
 The facility in this section belongs to the standalone `vertical-slice`
