@@ -195,9 +195,27 @@ def _compose_robots(
             handles[robot.id] = _RobotHandle(root, {})
         return handles, manager
     if kind == "decommissioning":
+        from pxr import Gf, Sdf, UsdGeom
+
         enable_real_robot_extensions()
         config = RealRobotAssetConfig()
         add_real_robot_references(stage, config=config)
+        for path, anchor_id in (
+            (config.countermeasure_root, "ground-primary"),
+            (config.measurement_root, "ground-secondary"),
+        ):
+            anchor = selection.spawn_anchor(anchor_id)
+            prim = stage.GetPrimAtPath(path)
+            xformable = UsdGeom.Xformable(prim)
+            xformable.ClearXformOpOrder()
+            xformable.AddTranslateOp().Set(Gf.Vec3d(*anchor.translation_m))
+            xformable.AddRotateZOp().Set(float(anchor.yaw_deg))
+            prim.CreateAttribute("rad:spawn:anchorId", Sdf.ValueTypeNames.String, custom=True).Set(
+                anchor_id
+            )
+            prim.CreateAttribute(
+                "rad:spawn:environmentId", Sdf.ValueTypeNames.String, custom=True
+            ).Set(selection.environment_id)
         handles["countermeasure"] = _RobotHandle(config.countermeasure_root, {})
         handles["measurement"] = _RobotHandle(
             config.measurement_articulation,

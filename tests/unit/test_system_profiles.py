@@ -147,3 +147,13 @@ def test_operator_gui_has_separate_explicit_system_and_llm_controls() -> None:
         "self._build_system_selector()"
     )
     assert "save_active_selection(" in dashboard
+
+
+def test_decommissioning_assets_use_environment_ground_anchors() -> None:
+    compositor = (
+        Path(__file__).resolve().parents[2]
+        / "source/extensions/radcounter.isaac/radcounter/isaac/system_profile.py"
+    ).read_text(encoding="utf-8")
+    assert '(config.countermeasure_root, "ground-primary")' in compositor
+    assert '(config.measurement_root, "ground-secondary")' in compositor
+    assert '"rad:spawn:environmentId"' in compositor
