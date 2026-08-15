@@ -105,7 +105,7 @@ def _passing_payload() -> tuple[dict[str, object], list[dict[str, object]]]:
             },
             {
                 "command": "execute_candidate",
-                "candidate_id": "shield-world-leadshield-35",
+                "candidate_id": "shield-world-leadshield-25",
                 "max_attempts": 1,
             },
             {
@@ -133,13 +133,13 @@ def _passing_payload() -> tuple[dict[str, object], list[dict[str, object]]]:
         _workflow_row(
             2,
             command="execute_candidate",
-            action_id="shield-world-leadshield-35",
+            action_id="shield-world-leadshield-25",
             action_type="place_shield",
             status="completed",
             public_details={
                 "object_path": SHIELD,
                 "deployment_state": "deployed",
-                "placement_fraction": 0.35,
+                "placement_fraction": 0.25,
                 "motion_audit": {"success": True, "placement_error_m": 0.01},
                 "collateral_motion_audit": collateral,
             },
@@ -235,7 +235,7 @@ def test_default_instruction_requests_achievable_bounded_complex_process() -> No
     assert "残存率60%以下" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "最大3回" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "LeadShield" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
-    assert "35%" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
+    assert "25%" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "65%" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "Protected" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "2秒測定" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
@@ -260,7 +260,7 @@ def test_default_instruction_repairs_small_model_refusal_to_primary_shield_proce
                     target_label="LeadShield",
                     placement_fraction=fraction,
                 )
-                for percentage, fraction in ((35, 0.35), (65, 0.65))
+                for percentage, fraction in ((25, 0.25), (65, 0.65))
             ),
             *tuple(
                 AvailableAction(
@@ -271,7 +271,7 @@ def test_default_instruction_repairs_small_model_refusal_to_primary_shield_proce
                     target_label="Staged lead service shield 02",
                     placement_fraction=fraction,
                 )
-                for percentage, fraction in ((35, 0.35), (65, 0.65))
+                for percentage, fraction in ((25, 0.25), (65, 0.65))
             ),
             AvailableAction(
                 action_id="measure-world-detectorstations-protected",
@@ -311,7 +311,7 @@ def test_default_instruction_repairs_small_model_refusal_to_primary_shield_proce
     assert repaired.steps[0].until is not None
     assert repaired.steps[0].until.threshold == pytest.approx(0.60)
     assert [step.candidate_id for step in repaired.steps[1:3]] == [
-        "shield-world-leadshield-35",
+        "shield-world-leadshield-25",
         "shield-world-leadshield-65",
     ]
     assert repaired.steps[4].duration_s == pytest.approx(2.0)
@@ -334,11 +334,11 @@ def test_complex_process_audit_accepts_ordered_bounded_public_results() -> None:
             lambda rows: rows[4]["public_details"].update(
                 object_path="/World/StagingLeadShield"
             ),
-            "same_primary_shield_placed_at_35_then_moved_to_65",
+            "same_primary_shield_placed_at_25_then_moved_to_65",
         ),
         (
             lambda rows: rows[4]["public_details"].update(placement_fraction=0.50),
-            "same_primary_shield_placed_at_35_then_moved_to_65",
+            "same_primary_shield_placed_at_25_then_moved_to_65",
         ),
         (
             lambda rows: rows[5]["public_details"].update(

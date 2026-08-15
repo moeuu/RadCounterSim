@@ -194,6 +194,11 @@ class ArticulatedTaskReport:
     finger_aperture_open_m: float | None = None
     finger_aperture_closed_m: float | None = None
     arm_joint_excursion_rad: float = 0.0
+    target_position_m: tuple[float, float, float] | None = None
+    release_position_m: tuple[float, float, float] | None = None
+    final_position_m: tuple[float, float, float] | None = None
+    release_orientation_wxyz: tuple[float, float, float, float] | None = None
+    final_orientation_wxyz: tuple[float, float, float, float] | None = None
 
 
 def enable_real_robot_extensions() -> None:
@@ -353,6 +358,14 @@ def decommissioning_facility_layout() -> FacilityLayoutManifest:
             room_id="remote_decon_room",
         ),
         FacilityPrimitiveSpec(
+            "ShieldServiceAlcoveFloor",
+            "floor",
+            (9.25, 0.50, -0.10),
+            (0.25, 0.90, 0.10),
+            floor_color,
+            room_id="remote_decon_room",
+        ),
+        FacilityPrimitiveSpec(
             "ServiceAccessFloor",
             "floor",
             (11.20, 4.25, -0.10),
@@ -418,11 +431,43 @@ def decommissioning_facility_layout() -> FacilityLayoutManifest:
             corridor_id="original_to_decon_transfer",
         ),
         FacilityPrimitiveSpec(
-            "DeconRoomWestWall",
+            "DeconRoomWestWallSouthJamb",
             "wall",
-            (9.50, 1.50, 1.50),
-            (0.10, 2.0, 1.50),
+            (9.50, -0.35, 1.50),
+            (0.10, 0.15, 1.50),
             wall_color,
+            room_id="remote_decon_room",
+        ),
+        FacilityPrimitiveSpec(
+            "DeconRoomWestWallNorth",
+            "wall",
+            (9.50, 2.35, 1.50),
+            (0.10, 1.15, 1.50),
+            wall_color,
+            room_id="remote_decon_room",
+        ),
+        FacilityPrimitiveSpec(
+            "ShieldServiceAlcoveWestWall",
+            "wall",
+            (9.0, 0.50, 1.50),
+            (0.10, 0.90, 1.50),
+            branch_color,
+            room_id="remote_decon_room",
+        ),
+        FacilityPrimitiveSpec(
+            "ShieldServiceAlcoveSouthWall",
+            "wall",
+            (9.25, -0.40, 1.50),
+            (0.25, 0.10, 1.50),
+            branch_color,
+            room_id="remote_decon_room",
+        ),
+        FacilityPrimitiveSpec(
+            "ShieldServiceAlcoveNorthWall",
+            "wall",
+            (9.25, 1.40, 1.50),
+            (0.25, 0.10, 1.50),
+            branch_color,
             room_id="remote_decon_room",
         ),
         FacilityPrimitiveSpec(
@@ -866,6 +911,28 @@ def decommissioning_facility_layout() -> FacilityLayoutManifest:
                 (20.15, 8.45, 0.28),
             ),
         ),
+        FacilityRouteSpec(
+            "primary_shield_25_service_route",
+            (
+                (3.84, 2.80, 0.28),
+                (5.20, -1.50, 0.28),
+                (8.90, -1.50, 0.28),
+                (10.30, -1.50, 0.28),
+                (10.30, 0.42755624655, 0.28),
+                (9.8825, 0.42755624655, 0.28),
+            ),
+        ),
+        FacilityRouteSpec(
+            "primary_shield_65_service_route",
+            (
+                (9.8825, 0.42755624655, 0.28),
+                (10.30, 0.42755624655, 0.28),
+                (10.30, -1.50, 0.28),
+                (8.90, -1.50, 0.28),
+                (5.20, -1.50, 0.28),
+                (4.1265, 0.19952624839, 0.28),
+            ),
+        ),
     )
     return FacilityLayoutManifest(
         layout_id="four_room_decommissioning_cell_v1",
@@ -1267,7 +1334,12 @@ def _author_staging_lead_shield(
     prim = shield.GetPrim()
     prim.SetDisplayName("Staged lead service shield 02")
     UsdPhysics.RigidBodyAPI.Apply(prim).CreateRigidBodyEnabledAttr(True)
-    UsdPhysics.MassAPI.Apply(prim).CreateMassAttr(2.2)
+    mass = UsdPhysics.MassAPI.Apply(prim)
+    mass.CreateMassAttr(2.2)
+    # The service panel is explicitly ballasted at its wheeled base.  Without
+    # the authored low centre of mass, PhysX derives it mostly from the tall
+    # plate volume and the panel can topple after a correct gripper release.
+    mass.CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, 0.10))
     for name, value_type, value in (
         ("rad:role", Sdf.ValueTypeNames.String, "shield"),
         ("rad:material:id", Sdf.ValueTypeNames.String, "lead"),
@@ -1290,7 +1362,7 @@ def _author_staging_lead_shield(
         stage,
         path + "/Base",
         translate=(0.0, 0.0, 0.035),
-        half_scale=(0.14, 0.20, 0.035),
+        half_scale=(0.18, 0.30, 0.035),
         color=(0.11, 0.12, 0.13),
     )
     plate = _cube(
@@ -1605,7 +1677,9 @@ def author_real_robot_task_scene(
     shield.AddTranslateOp().Set(Gf.Vec3d(*cfg.shield_initial_position_m))
     shield_prim = shield.GetPrim()
     UsdPhysics.RigidBodyAPI.Apply(shield_prim).CreateRigidBodyEnabledAttr(True)
-    UsdPhysics.MassAPI.Apply(shield_prim).CreateMassAttr(2.2)
+    mass = UsdPhysics.MassAPI.Apply(shield_prim)
+    mass.CreateMassAttr(2.2)
+    mass.CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, 0.10))
     for name, value_type, value in (
         ("rad:role", Sdf.ValueTypeNames.String, "shield"),
         ("rad:material:id", Sdf.ValueTypeNames.String, "lead"),
@@ -1621,7 +1695,7 @@ def author_real_robot_task_scene(
         stage,
         cfg.shield_path + "/Base",
         translate=(0.0, 0.0, 0.035),
-        half_scale=(0.14, 0.20, 0.035),
+        half_scale=(0.18, 0.30, 0.035),
         color=(0.11, 0.12, 0.13),
     )
     plate = _cube(
@@ -2407,10 +2481,9 @@ class RidgebackFrankaController:
         self._step(None, 1)
         return distance
 
-    def _release_object(self) -> None:
-        if self._grasped_object_path is None:
-            raise RuntimeError("no object is grasped")
-        self.stage.RemovePrim(self._grasp_joint_path)
+    def _restore_grasp_collisions(self) -> None:
+        """Restore handle collisions after the open fingers have retracted."""
+
         for path, enabled in self._grasp_collision_state.items():
             collision = self.stage.GetPrimAtPath(path).GetAttribute(
                 "physics:collisionEnabled"
@@ -2418,6 +2491,26 @@ class RidgebackFrankaController:
             if collision:
                 collision.Set(enabled)
         self._grasp_collision_state.clear()
+
+    def _release_object(self, *, restore_collisions: bool = True) -> None:
+        if self._grasped_object_path is None:
+            raise RuntimeError("no object is grasped")
+        # A fixed joint can retain the last interpolation velocity on the
+        # payload even after the hand has reached its final target.  Clear
+        # that residual motion before detaching so a tall service shield is
+        # released from rest instead of receiving a repeatable tipping
+        # impulse.  Gravity and contacts remain active after the joint is
+        # removed; this is not a pose teleport or a kinematic placement.
+        target = self.stage.GetPrimAtPath(self._grasped_object_path)
+        from pxr import Gf
+
+        for attribute_name in ("physics:velocity", "physics:angularVelocity"):
+            attribute = target.GetAttribute(attribute_name)
+            if attribute:
+                attribute.Set(Gf.Vec3f(0.0))
+        self.stage.RemovePrim(self._grasp_joint_path)
+        if restore_collisions:
+            self._restore_grasp_collisions()
         self._grasped_object_path = None
         self._step(None, 1)
 
@@ -2590,12 +2683,17 @@ class RidgebackFrankaController:
         destination_grasp = destination_root + grasp_offset
         preplace = destination_grasp + np.asarray((0.0, 0.0, 0.16))
         placement_targets = (
-            preplace,
-            destination_grasp + np.asarray((0.0, 0.0, 0.08)),
-            destination_grasp + np.asarray((0.0, 0.0, 0.04)),
+            (preplace, 0.025),
+            (destination_grasp + np.asarray((0.0, 0.0, 0.08)), 0.025),
+            # Finish 5 mm above the authored support plane.  The former
+            # 40 mm release height made a correctly routed tall panel free-
+            # fall onto one edge and topple during the settle audit.
+            (destination_grasp + np.asarray((0.0, 0.0, 0.005)), 0.012),
         )
-        for index, target_position in enumerate(placement_targets, start=1):
-            motion = self.move_hand(target_position, tolerance_m=0.025)
+        for index, (target_position, tolerance_m) in enumerate(
+            placement_targets, start=1
+        ):
+            motion = self.move_hand(target_position, tolerance_m=tolerance_m)
             total_steps += motion.steps
             phases.append(f"place_{index}")
             if not motion.success:
@@ -2617,16 +2715,26 @@ class RidgebackFrankaController:
                 )
         if before_release is not None:
             before_release()
+        # Let the closed-loop arm and attached payload come fully to rest at
+        # the low release pose before opening the fingers.
+        self.hold(30)
+        phases.append("stabilize_before_release")
+        release_position, release_orientation = _world_pose(self.stage, object_path)
         self.set_gripper(0.035)
         self._transition("releasing")
-        self._release_object()
-        phases.extend(("open_gripper", "release", "settle"))
+        # Keep the service-handle collision disabled for the few frames in
+        # which the open fingers retract. Re-enabling it while the gripper is
+        # still co-located with the handle can apply a separation impulse and
+        # topple an otherwise stable shield after an accurate placement.
+        self._release_object(restore_collisions=False)
+        phases.extend(("open_gripper", "release", "retract_after_release", "settle"))
+        self.move_hand(preplace)
+        self._restore_grasp_collisions()
         self.hold(90)
         if after_release is not None:
             after_release()
-        final_position, _ = _world_pose(self.stage, object_path)
+        final_position, final_orientation = _world_pose(self.stage, object_path)
         placement_error = float(np.linalg.norm(final_position - destination_root))
-        self.move_hand(preplace)
         success = placement_error <= placement_settle_tolerance_m
         state = "complete" if success else "failed"
         self._transition(state)
@@ -2648,6 +2756,11 @@ class RidgebackFrankaController:
             open_aperture,
             closed_aperture,
             self.arm_joint_excursion_rad,
+            tuple(map(float, destination_root)),
+            tuple(map(float, release_position)),
+            tuple(map(float, final_position)),
+            tuple(map(float, release_orientation)),
+            tuple(map(float, final_orientation)),
         )
 
     def remove_to_disposal_zone(

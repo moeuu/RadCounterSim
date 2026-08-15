@@ -27,7 +27,11 @@ class SceneCandidateConfig:
     mobile_clearance_m: float = 0.28
     manipulator_workspace_m: float = 1.55
     manipulator_vertical_range_m: tuple[float, float] = (-0.35, 1.15)
-    shield_line_fractions: tuple[float, ...] = (0.35, 0.5, 0.65)
+    # Include a near-source slot inside the remote room as well as the
+    # original-cell slots.  In a multi-room facility the straight line to the
+    # protected station crosses the west wall around 35%, so 25% is the first
+    # physically reachable host-owned placement slot for a staged panel.
+    shield_line_fractions: tuple[float, ...] = (0.25, 0.35, 0.5, 0.65)
     measurement_duration_s: float = 2.0
     shield_duration_s: float = 45.0
     decon_duration_s: float = 20.0
@@ -913,14 +917,14 @@ class IsaacActionCandidateGenerator:
                 placement_options: list[
                     tuple[float, np.ndarray, np.ndarray, FeasibilityFacts]
                 ] = []
-                # A 180-degree approach leaves this symmetric shield's plane
-                # unchanged while moving the Ridgeback chassis to the other
-                # side of the placement point.  Side approaches remain useful
-                # fallbacks in more crowded scenes.
-                for placement_yaw in (0.0, math.pi, -math.pi / 2.0, math.pi / 2.0):
-                    # The IK controller keeps the hand orientation fixed in
-                    # world space. Base yaw changes which side the Ridgeback
-                    # stands on, but does not rotate the released payload.
+                # This panel has one physical service handle on its west face.
+                # The controller preserves the payload's world orientation, so
+                # a pi-yaw fallback would put the Ridgeback east of the plate
+                # while its arm still reaches through to the west handle. That
+                # overlaps the chassis and payload at release. Keep the base on
+                # the authored handle side until orientation-aware payload
+                # rotation or a verified second grasp frame is implemented.
+                for placement_yaw in (0.0,):
                     target_grasp = target_root + grasp_from_root
                     placement_base = self._base_for_end_effector(
                         target_grasp,

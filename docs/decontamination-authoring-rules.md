@@ -124,6 +124,12 @@ truth.
 5. A staged secondary physical shield may be present in the shield-staging room,
    but it must have a distinct inventory identity and must not alter or obstruct
    the existing primary shield's pickup, placement, or correction routes.
+6. The primary shield's single service handle is authored on its west face. The
+   current controller preserves payload world orientation, so shield placement
+   must use the matching yaw-zero, handle-side approach. The remote-room service
+   alcove keeps the 25% placement base and the return route to the 65% placement
+   clear. Do not restore a yaw-pi fallback unless payload rotation or a verified
+   second grasp frame and chassis-to-payload collision check are implemented.
 
 ## Required maintenance workflow
 

@@ -95,6 +95,11 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     assert '"lift_transport"' in controller
     assert "retract_xy = pickup_base[:2] - grasp_position[:2]" in controller
     assert "grasp_position + retract_world" in controller
+    assert "self._release_object(restore_collisions=False)" in controller
+    release_index = controller.index("self._release_object(restore_collisions=False)")
+    retract_index = controller.index("self.move_hand(preplace)", release_index)
+    restore_index = controller.index("self._restore_grasp_collisions()", retract_index)
+    assert release_index < retract_index < restore_index
 
     rules = (root / "docs/decontamination-authoring-rules.md").read_text(
         encoding="utf-8"
@@ -195,7 +200,12 @@ def test_complex_decommissioning_facility_manifest_is_deterministic_and_clear() 
     )
 
     route_ids = {route.route_id for route in layout.reserved_routes}
-    assert route_ids == {"primary_decon_route", "staging_room_service_route"}
+    assert route_ids == {
+        "primary_decon_route",
+        "staging_room_service_route",
+        "primary_shield_25_service_route",
+        "primary_shield_65_service_route",
+    }
     for route_id in route_ids:
         assert facility_route_clearance_m(layout, route_id) >= 0.65
     primary_route = next(
@@ -218,6 +228,52 @@ def test_complex_decommissioning_facility_manifest_is_deterministic_and_clear() 
     assert layout.secondary_shield_path == "/World/StagingLeadShield"
     assert layout.secondary_shield_path != config.shield_path
 
+    primitive_paths = {primitive.path for primitive in layout.primitives}
+    assert {
+        "ShieldServiceAlcoveFloor",
+        "ShieldServiceAlcoveWestWall",
+        "DeconRoomWestWallSouthJamb",
+        "DeconRoomWestWallNorth",
+    } <= primitive_paths
+
+
+def test_primary_shield_25_and_65_routes_use_the_west_handle_service_side() -> None:
+    from radcounter.isaac.planning.scene_candidates import (
+        IsaacActionCandidateGenerator,
+    )
+    from radcounter.isaac.robot.real_robots import (
+        RealRobotAssetConfig,
+        decommissioning_facility_layout,
+        facility_route_clearance_m,
+    )
+
+    layout = decommissioning_facility_layout()
+    route_by_id = {route.route_id: route for route in layout.reserved_routes}
+    generator = object.__new__(IsaacActionCandidateGenerator)
+    generator.config = SimpleNamespace(end_effector_offset_m=(0.72, 0.0, 0.0))
+    shield_config = RealRobotAssetConfig()
+    public_source = np.asarray((14.39, 0.5700749954, 0.45))
+    protected = np.asarray((0.0, 0.0, 0.45))
+    root_from_center = np.asarray((0.05, 0.0, -0.45))
+
+    for percentage, fraction in ((25, 0.25), (65, 0.65)):
+        target_root = public_source + fraction * (protected - public_source)
+        target_root += root_from_center
+        target_grasp = target_root + np.asarray(shield_config.shield_grasp_offset_m)
+        placement_base = generator._base_for_end_effector(
+            target_grasp,
+            robot_z=0.28,
+            yaw_rad=0.0,
+        )
+        route_id = f"primary_shield_{percentage}_service_route"
+        route_endpoint = np.asarray(route_by_id[route_id].waypoints_m[-1])
+
+        assert np.allclose(route_endpoint, placement_base, atol=1.0e-9)
+        assert np.isclose(target_root[0] - placement_base[0], 0.96)
+        assert np.isclose(target_root[1], placement_base[1])
+        assert placement_base[0] < target_grasp[0] < target_root[0]
+        assert facility_route_clearance_m(layout, route_id) >= 0.65
+
 
 def test_complex_facility_authoring_declares_auditable_metadata() -> None:
     source = (
@@ -237,9 +293,18 @@ def test_complex_facility_authoring_declares_auditable_metadata() -> None:
         assert attribute_name in source
     assert "same_visible_irregular_collision_activity_mesh" in source
     assert "def _author_staging_lead_shield" in source
+    assert source.count("CreateCenterOfMassAttr(Gf.Vec3f(0.0, 0.0, 0.10))") >= 2
+    assert source.count("half_scale=(0.18, 0.30, 0.035)") >= 2
     assert '"rad:shield:inventoryId"' in source
     assert '"staging-shield-02"' in source
     assert "facility_layout = _author_remote_decon_facility(stage)" in source
+
+    planner_source = (
+        ROOT
+        / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
+    ).read_text(encoding="utf-8")
+    assert "for placement_yaw in (0.0,):" in planner_source
+    assert "overlaps the chassis and payload at release" in planner_source
 
 
 def test_carried_shield_route_avoids_drum_swept_volume() -> None:
