@@ -59,7 +59,7 @@ performed by the HOOPS Exchange converter bundled with Isaac Sim; `.SLDASM`
 and `.SLDPRT` are not passed to the simulator as if they were portable meshes.
 
 In the RadCounterSim Operations window, operators select an environment, robot
-set, and detector set by display name and press **選択した構成を適用 / Apply**.
+set, and detector set by display name and press **Apply selected configuration**.
 No catalog ID, file path, or CLI knowledge is needed for normal operation.
 Invalid detector/robot combinations are rejected before the stage changes.
 The separate LLM field controls robot tasks; it does not interpret or change

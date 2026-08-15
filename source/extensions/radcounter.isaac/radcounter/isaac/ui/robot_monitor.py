@@ -122,14 +122,17 @@ class _RobotViewportManipulator(sc.Manipulator):
         if self.target_m is not None:
             target = tuple(self.target_m)
             sc.Points([target], colors=[cl(1.0, 0.35, 0.28, 0.92)], sizes=[16.0])
-            with sc.Transform(
-                look_at=sc.Transform.LookAt.CAMERA,
-                transform=sc.Matrix44.get_translation_matrix(
-                    target[0], target[1], target[2] + 0.45
+            with (
+                sc.Transform(
+                    look_at=sc.Transform.LookAt.CAMERA,
+                    transform=sc.Matrix44.get_translation_matrix(
+                        target[0], target[1], target[2] + 0.45
+                    ),
                 ),
-            ), sc.Transform(scale_to=sc.Space.NDC):
+                sc.Transform(scale_to=sc.Space.NDC),
+            ):
                 sc.Label(
-                    self.target_label or "作業目標",
+                    self.target_label or "Work target",
                     alignment=ui.Alignment.CENTER_BOTTOM,
                     color=cl(1.0, 0.55, 0.42, 0.95),
                     size=15,
@@ -152,10 +155,13 @@ class _RobotViewportManipulator(sc.Manipulator):
                 distance_m = math.dist(position, self.camera_position_m)
                 distance = f" · {distance_m:.1f} m"
             suffix = f"\n{self.operation_label}" if active and self.operation_label else ""
-            with sc.Transform(
-                look_at=sc.Transform.LookAt.CAMERA,
-                transform=sc.Matrix44.get_translation_matrix(*marker_position),
-            ), sc.Transform(scale_to=sc.Space.NDC):
+            with (
+                sc.Transform(
+                    look_at=sc.Transform.LookAt.CAMERA,
+                    transform=sc.Matrix44.get_translation_matrix(*marker_position),
+                ),
+                sc.Transform(scale_to=sc.Space.NDC),
+            ):
                 sc.Label(
                     f"{item['display_name']}{distance}{suffix}",
                     alignment=ui.Alignment.CENTER_BOTTOM,
@@ -173,7 +179,7 @@ class RobotMonitorOverlay:
         self.ext_id = ext_id
         self.robots: tuple[MonitorRobot, ...] = ()
         self.active_robot_id: str | None = None
-        self.active_action = "待機中"
+        self.active_action = "Idle"
         self.active_phase = "idle"
         self.progress = 0.0
         self.coverage_fraction: float | None = None
@@ -193,9 +199,7 @@ class RobotMonitorOverlay:
         self._last_tick_s = 0.0
         self._map_lower_xy = (-5.0, -5.0)
         self._map_upper_xy = (5.0, 5.0)
-        self._structure_rectangles: tuple[
-            tuple[tuple[float, float, float], ...], ...
-        ] = ()
+        self._structure_rectangles: tuple[tuple[tuple[float, float, float], ...], ...] = ()
         self._contamination_points: tuple[tuple[float, float, float], ...] = ()
         self._overlay_error: str | None = None
         self._on_robot_list_changed: Callable[[], None] | None = None
@@ -208,8 +212,8 @@ class RobotMonitorOverlay:
         self._minimap_scene: Any | None = None
         self._minimap_dynamic: Any | None = None
         self._active_model = ui.SimpleStringModel("NO ACTIVE ROBOT")
-        self._position_model = ui.SimpleStringModel("位置 --")
-        self._action_model = ui.SimpleStringModel("待機中")
+        self._position_model = ui.SimpleStringModel("Position --")
+        self._action_model = ui.SimpleStringModel("Idle")
         self._camera_model = ui.SimpleStringModel("FREE CAMERA")
         self._progress_model = ui.SimpleFloatModel(0.0)
         self._progress_text_model = ui.SimpleStringModel("0%")
@@ -325,7 +329,7 @@ class RobotMonitorOverlay:
             with ui.VStack(spacing=2):
                 ui.Spacer(height=7)
                 ui.Label(
-                    "BUILDING OVERVIEW / 建屋俯瞰",
+                    "BUILDING OVERVIEW",
                     height=18,
                     alignment=ui.Alignment.CENTER,
                     style={"font_size": 11, "color": 0xFF9BAAB4},
@@ -340,7 +344,7 @@ class RobotMonitorOverlay:
     def configure(self, selection: Any) -> None:
         self.robots = robots_for_selection(selection)
         self.active_robot_id = self.robots[0].robot_id if self.robots else None
-        self.active_action = "待機中"
+        self.active_action = "Idle"
         self.active_phase = "idle"
         self.progress = 0.0
         self.coverage_fraction = None
@@ -401,9 +405,9 @@ class RobotMonitorOverlay:
                 if prim.IsA(UsdGeom.Mesh):
                     points = UsdGeom.Mesh(prim).GetPointsAttr().Get()
                 if points:
-                    transform = UsdGeom.XformCache(
-                        Usd.TimeCode.Default()
-                    ).GetLocalToWorldTransform(prim)
+                    transform = UsdGeom.XformCache(Usd.TimeCode.Default()).GetLocalToWorldTransform(
+                        prim
+                    )
                     stride = max(1, int(math.ceil(len(points) / 96)))
                     for point in points[::stride]:
                         world = transform.Transform(Gf.Vec3d(*point))
@@ -480,8 +484,7 @@ class RobotMonitorOverlay:
             if self._contamination_points:
                 sc.Points(
                     self._contamination_points,
-                    colors=[cl(1.0, 0.28, 0.22, 0.78)]
-                    * len(self._contamination_points),
+                    colors=[cl(1.0, 0.28, 0.22, 0.78)] * len(self._contamination_points),
                     sizes=[8.0],
                 )
             self._minimap_dynamic = sc.Transform()
@@ -536,11 +539,7 @@ class RobotMonitorOverlay:
         self._auto_work_view = auto_work_view
         self._work_view_triggered = False
         self.route_m = tuple(tuple(float(item) for item in point[:3]) for point in route_m)
-        self.target_m = (
-            None
-            if target_m is None
-            else tuple(float(item) for item in target_m[:3])
-        )
+        self.target_m = None if target_m is None else tuple(float(item) for item in target_m[:3])
         self.target_path = target_path
         self.follow_robot(self.active_robot_id)
         self._update_models(self._robot_snapshots())
@@ -743,10 +742,7 @@ class RobotMonitorOverlay:
             and current_world is not None
             and float(
                 np.max(
-                    np.abs(
-                        self._matrix_array(current_world)
-                        - self._authored_camera_world_matrix
-                    )
+                    np.abs(self._matrix_array(current_world) - self._authored_camera_world_matrix)
                 )
             )
             > 1.0e-3
@@ -827,25 +823,25 @@ class RobotMonitorOverlay:
         )
         robot = self._robot_by_id(self.active_robot_id)
         name = robot.display_name if robot is not None else "NO ACTIVE ROBOT"
-        self._active_model.set_value(f"ACTIVE / 作業中: {name}")
+        self._active_model.set_value(f"ACTIVE ROBOT: {name}")
         if active is None:
-            self._position_model.set_value("位置 --")
+            self._position_model.set_value("Position --")
         else:
             x, y, z = active["position_m"]
-            self._position_model.set_value(f"位置 X {x:.2f} · Y {y:.2f} · Z {z:.2f} m")
+            self._position_model.set_value(f"Position X {x:.2f} · Y {y:.2f} · Z {z:.2f} m")
         phase = phase_label(self.active_phase)
         coverage = (
             ""
             if self.coverage_fraction is None
-            else f" · 処理済み {100.0 * self.coverage_fraction:.0f}%"
+            else f" · processed {100.0 * self.coverage_fraction:.0f}%"
         )
         self._action_model.set_value(f"{self.active_action} · {phase}{coverage}")
         camera_names = {
-            "free": "FREE CAMERA / 手動",
-            "follow": "FOLLOW / 追従",
-            "work": "WORK VIEW / 作業",
-            "onboard": "ONBOARD / 搭載",
-            "overview": "OVERVIEW / 俯瞰",
+            "free": "FREE CAMERA",
+            "follow": "FOLLOW",
+            "work": "WORK VIEW",
+            "onboard": "ONBOARD",
+            "overview": "OVERVIEW",
         }
         self._camera_model.set_value(camera_names.get(self.camera_mode, self.camera_mode.upper()))
         self._progress_model.set_value(float(self.progress))
@@ -913,12 +909,12 @@ class RobotMonitorOverlay:
         stage = omni.usd.get_context().get_stage()
         camera_position = None if stage is None else self._camera_position(stage)
         if self._viewport_manipulator is not None:
-            if "測定" in self.active_action:
-                target_label = "検出器の測定位置"
+            if "measure" in self.active_action.casefold():
+                target_label = "Detector measurement position"
             elif self.target_path:
                 target_label = self.target_path.rsplit("/", 1)[-1]
             else:
-                target_label = "作業目標"
+                target_label = "Work target"
             self._viewport_manipulator.update(
                 robots=snapshots,
                 active_robot_id=self.active_robot_id,

@@ -109,7 +109,7 @@ See `docs/robot-monitoring.md`.
 
 ## Local natural-language application
 
-The interactive application accepts Japanese and English instructions, maps
+The interactive application accepts English instructions, maps
 them to a strict allowlist, previews physical operations, and executes them
 through the existing workflow boundary. Release builds own a bundled
 `llama.cpp` sidecar and an official Qwen3-4B GGUF model; users do not install

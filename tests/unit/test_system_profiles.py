@@ -136,13 +136,13 @@ def test_operator_gui_has_separate_explicit_system_and_llm_controls() -> None:
         Path(__file__).resolve().parents[2]
         / "source/extensions/radcounter.isaac/radcounter/isaac/ui/dashboard.py"
     ).read_text(encoding="utf-8")
-    assert "SYSTEM CONFIGURATION / 構成" in dashboard
+    assert "SYSTEM CONFIGURATION" in dashboard
     assert '"Environment"' in dashboard
     assert '"Robot"' in dashboard
     assert '"Detector"' in dashboard
-    assert "選択した構成を適用 / Apply" in dashboard
+    assert "Apply selected configuration" in dashboard
     assert "NATURAL LANGUAGE COMMAND / ROBOT LLM" in dashboard
-    assert "構成変更は下の選択欄" in dashboard
+    assert "Change the environment, robot" in dashboard
     assert dashboard.index("NATURAL LANGUAGE COMMAND / ROBOT LLM") < dashboard.index(
         "self._build_system_selector()"
     )

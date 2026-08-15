@@ -2,7 +2,7 @@
 
 ## Natural-language application control
 
-- Added bilingual Japanese/English command interpretation through a bundled,
+- Added English command interpretation through a bundled,
   loopback-only llama.cpp sidecar and Qwen3-4B GGUF model.
 - Added schema-constrained plans, live candidate resolution, deterministic
   feasibility validation, physical-action confirmation, and JSONL audits.

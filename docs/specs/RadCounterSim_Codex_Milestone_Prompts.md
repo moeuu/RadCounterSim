@@ -1,180 +1,185 @@
-# RadCounterSim — Codex 用段階実装プロンプト
+# RadCounterSim — Staged Codex Implementation Prompts
 
-## 使用方法
+## How to use this document
 
-一度に全機能を実装させず、以下を上から一つずつ Codex に渡す。各 milestone では、まず既存コードと対象 Isaac Sim version の API を調査し、設計変更を `docs/decisions/ADR-XXXX.md` に残し、テスト成功後に次へ進む。
+Do not ask Codex to implement every feature at once. Submit the prompts below one
+milestone at a time, in order. At each milestone, first inspect the existing code and
+the API of the targeted Isaac Sim version, record design changes in
+`docs/decisions/ADR-XXXX.md`, and proceed only after the tests pass.
 
-共通指示:
+Instructions common to every milestone:
 
 ```text
-- RadCounterSim_Codex_Implementation_Spec.md を最上位仕様とする。
-- 関係のない既存コードを変更しない。
-- public API には型注釈と docstring を付ける。
-- 単位を変数名に含める。
-- TruthState と BeliefState の依存方向を破らない。
-- 実装前に変更予定ファイル一覧とテスト計画を提示する。
-- 実装後に実行したコマンド、成功したテスト、未解決事項を報告する。
-- mock だけで完了扱いにしない。ただし外部依存がない unit-testable core を先に作る。
+- Treat RadCounterSim_Codex_Implementation_Spec.md as the highest-level specification.
+- Do not modify unrelated existing code.
+- Add type annotations and docstrings to public APIs.
+- Include units in variable names.
+- Preserve the dependency boundary between TruthState and BeliefState.
+- Before implementation, list the files to be changed and provide a test plan.
+- After implementation, report the commands run, passing tests, and unresolved items.
+- Do not declare completion with mocks alone. Build the unit-testable, dependency-free
+  core first where appropriate.
 ```
 
 ---
 
-## Prompt 0 — リポジトリと extension scaffold
+## Prompt 0 — Repository and extension scaffold
 
 ```text
-RadCounterSim_Codex_Implementation_Spec.md の Milestone 0 を実装してください。
+Implement Milestone 0 of RadCounterSim_Codex_Implementation_Spec.md.
 
-要件:
-1. Isaac Sim 6.0.1 source workspace の UI extension template と C++ extension templateを使用する。
-2. radcounter.core、radcounter.radiation.native、radcounter.isaac の三層を作る。
-3. UI extension は Examples Browser に登録し、Load/Reset/Clear が動く。
-4. headless startup test と純 Python unit test の実行経路を用意する。
-5. YAML scenario schema、Pydantic config model、validate_scenario.py を作る。
-6. run manifest と JSONL event logger の skeleton を作る。
-7. CI 用コマンドと local setup を README に書く。
-8. Isaac Sim の extension dependency 名はローカル 6.0.1 の公式 template/example から確認し、推測で書かない。
+Requirements:
+1. Use the UI extension and C++ extension templates from an Isaac Sim 6.0.1 source workspace.
+2. Create the radcounter.core, radcounter.radiation.native, and radcounter.isaac layers.
+3. Register the UI extension in the Examples Browser and make Load, Reset, and Clear work.
+4. Provide execution paths for a headless startup test and pure-Python unit tests.
+5. Create a YAML scenario schema, Pydantic configuration model, and validate_scenario.py.
+6. Create skeletons for the run manifest and JSONL event logger.
+7. Document CI commands and local setup in the README.
+8. Verify Isaac Sim extension dependency names against local 6.0.1 official templates or
+   examples; do not guess them.
 
-受入条件:
-- extension startup test pass
-- pytest の空でない test suite pass
-- sample scenario validation pass
-- GUI で RadCounterSim example が表示される
+Acceptance criteria:
+- The extension startup test passes.
+- A non-empty pytest suite passes.
+- The sample scenario validates.
+- The RadCounterSim example appears in the GUI.
 ```
 
-## Prompt 1 — 基本モデルと解析 radiation backend
+## Prompt 1 — Core models and analytic radiation backend
 
 ```text
-Milestone 1 を実装してください。
+Implement Milestone 1.
 
-実装対象:
-- SourceType、EmissionLine、IsotopeSpec、PointSourceState、SurfaceSourceState
-- MaterialSpec、DetectorSpec、RadiationMeasurement、RevisionState
-- MaterialTable の energy interpolation
-- Point source inverse-square forward model
+Implementation scope:
+- SourceType, EmissionLine, IsotopeSpec, PointSourceState, SurfaceSourceState
+- MaterialSpec, DetectorSpec, RadiationMeasurement, RevisionState
+- MaterialTable energy interpolation
+- Point-source inverse-square forward model
 - NoScatterModel
-- AnalyticTransportBackend: no attenuation と single slab
-- detector efficiency、background、dead time、Poisson sampling
-- deterministic RNG hierarchy
+- AnalyticTransportBackend with no attenuation and a single slab
+- Detector efficiency, background, dead time, and Poisson sampling
+- Deterministic RNG hierarchy
 
-テスト:
+Tests:
 - 1/r^2
 - exp(-mu*l)
-- energy interpolation
+- Energy interpolation
 - Poisson reproducibility
-- zero/disabled source
-- unit validation
+- Zero or disabled source
+- Unit validation
 
-受入条件:
-- 全 math unit test pass
-- source/length/activity/count/dose の単位が docs に明記
+Acceptance criteria:
+- All mathematical unit tests pass.
+- The units for source, length, activity, count, and dose are documented.
 ```
 
-## Prompt 2 — USD radiation metadata と mesh extraction
+## Prompt 2 — USD radiation metadata and mesh extraction
 
 ```text
-Milestone 2 を実装してください。
+Implement Milestone 2.
 
-実装対象:
-- rad:* custom attributes の helper
+Implementation scope:
+- Helpers for rad:* custom attributes
 - UsdRadiationRegistry
 - SceneDescriptor
 - UsdGeom.Mesh extraction
-- triangulation、metersPerUnit、world transform、instances、negative/non-uniform scale
-- material ID per triangle
-- transport mesh selection
-- USD change notice と revision update
-- per-face activity sidecar URI/checksum
+- Triangulation, metersPerUnit, world transforms, instances, and negative/non-uniform scale
+- Per-triangle material IDs
+- Transport-mesh selection
+- USD change notices and revision updates
+- URI and checksum for per-face activity sidecars
 
-作る demo USD:
-- room
-- concrete wall
-- thin shield panel
-- contaminated floor
-- movable contaminated box
-- detector mount
+Create a demo USD containing:
+- A room
+- A concrete wall
+- A thin shield panel
+- A contaminated floor
+- A movable contaminated box
+- A detector mount
 
-テスト:
-- demo stage scan
-- descriptor counts
-- triangle/area/transform
-- revision classification
-- full rescan が不要な変更通知
+Tests:
+- Demo-stage scan
+- Descriptor counts
+- Triangles, areas, and transforms
+- Revision classification
+- Change notification without a full rescan
 ```
 
 ## Prompt 3 — Embree C++ backend
 
 ```text
-Milestone 3 を実装してください。
+Implement Milestone 3.
 
-実装対象:
+Implementation scope:
 - EmbreeTransportScene C++ class
 - pybind11 bindings
-- triangle mesh registration
-- static geometry と dynamic instances
-- transform update、remove、commit
-- finite segment rays
-- repeated closest-hit による全交差収集
-- solid entry/exit path length
-- thin-sheet effective thickness
-- material-wise path lengths
-- energy-wise transmission
-- GIL release、parallel batch query、thread safety
-- explicit error handling
+- Triangle-mesh registration
+- Static geometry and dynamic instances
+- Transform update, removal, and commit
+- Finite segment rays
+- Collection of all intersections through repeated closest-hit queries
+- Solid entry/exit path length
+- Thin-sheet effective thickness
+- Per-material path lengths
+- Per-energy transmission
+- GIL release, parallel batch queries, and thread safety
+- Explicit error handling
 
-テスト geometry:
-- slab
-- cube
-- nested cubes
-- two materials
-- thin sheet normal/oblique
-- moving instance
-- odd-hit invalid mesh
+Test geometry:
+- Slab
+- Cube
+- Nested cubes
+- Two materials
+- Thin sheet at normal and oblique incidence
+- Moving instance
+- Invalid odd-hit mesh
 
-benchmark:
-- 1k、10k、100k rays
-- result を JSON に保存
+Benchmark:
+- 1k, 10k, and 100k rays
+- Save results as JSON.
 
-受入条件:
-- analytic tests pass
-- memory leak がない
-- commit と trace の race test pass
+Acceptance criteria:
+- Analytic tests pass.
+- No memory leak is detected.
+- Commit/trace race tests pass.
 ```
 
-## Prompt 4 — Surface source、sensor、dose map、cache
+## Prompt 4 — Surface sources, sensors, dose maps, and cache
 
 ```text
-Milestone 4 と 5 の radiation 部分を実装してください。
+Implement the radiation portions of Milestones 4 and 5.
 
-実装対象:
+Implementation scope:
 - SourceSampleBatch
-- point/surface quadrature: centroid、stratified、adaptive
-- attached source transform update
+- Point and surface quadrature: centroid, stratified, and adaptive
+- Transform updates for attached sources
 - RadiationForwardModel
-- OmnidirectionalCounter、RotatingShieldCounter、DoseRateMeter
-- measurement state machine
-- moving integration trajectory sampling
-- transfer matrix H
-- TransferMatrixCache と revision rules
+- OmnidirectionalCounter, RotatingShieldCounter, and DoseRateMeter
+- Measurement state machine
+- Moving-integration trajectory sampling
+- Transfer matrix H
+- TransferMatrixCache and revision rules
 - DoseMapEvaluator
-- chunk processing
+- Chunked processing
 
-重要:
-- decon activity change では ray trace cache を無効化しない。
-- shield geometry change では geometry-dependent cache を無効化する。
-- truth scatter/bias と planner model を分ける。
+Important:
+- Decontamination activity changes must not invalidate the ray-trace cache.
+- Shield geometry changes must invalidate geometry-dependent cache entries.
+- Keep truth scatter/bias separate from the planner model.
 
-テスト:
-- surface rectangle convergence
-- sensor on moving prim
-- cache hit/miss
-- activity-only fast update
-- rotating shield physical geometry mode
+Tests:
+- Surface-rectangle convergence
+- Sensor on a moving prim
+- Cache hits and misses
+- Activity-only fast update
+- Rotating-shield physical-geometry mode
 ```
 
-## Prompt 5 — UI と visualization
+## Prompt 5 — UI and visualization
 
 ```text
-Milestone 5 の UI/visualization を実装してください。
+Implement the UI and visualization portions of Milestone 5.
 
 Frames:
 - Scenario
@@ -188,227 +193,227 @@ Frames:
 
 Visualization:
 - 2D dose heatmap
-- truth source debug overlay
-- belief source overlay placeholder
-- selected ray path/material lengths
-- revision and timing display
+- Truth-source debug overlay
+- Belief-source overlay placeholder
+- Selected ray path and material lengths
+- Revision and timing display
 
-要件:
-- heavy computation は async task
-- cancel token
-- stale revision の result は破棄
-- UI callback で blocking trace をしない
+Requirements:
+- Run heavy computation in asynchronous tasks.
+- Provide cancellation tokens.
+- Discard results from stale revisions.
+- Never perform blocking traces in UI callbacks.
 ```
 
 ## Prompt 6 — Deterministic countermeasure actions
 
 ```text
-Milestone 6 を実装してください。
+Implement Milestone 6.
 
-実装対象:
-- CountermeasureAction、ActionResult、ActionType
-- action lifecycle/state machine
-- ResourceState と consumption
+Implementation scope:
+- CountermeasureAction, ActionResult, and ActionType
+- Action lifecycle and state machine
+- ResourceState and consumption
 - DeterministicRobotController
 - DecontaminationExecutor
 - ShieldPlacementExecutor
 - MoveObjectExecutor
 - RemoveObjectExecutor
 - DisposalZone
-- truth action uncertainty
-- public_details と truth_details の分離
+- Truth-side action uncertainty
+- Separation of public_details and truth_details
 
-除染:
-- triangle activity map
-- footprint path
-- exposure model
-- spatial efficiency random field
-- discard/transfer_to_waste
+Decontamination:
+- Triangle activity map
+- Footprint path
+- Exposure model
+- Spatial efficiency random field
+- discard and transfer_to_waste modes
 
-遮蔽:
-- shield asset spawn/move
-- actual pose error
+Shielding:
+- Shield asset spawn and movement
+- Actual pose error
 - Embree update
 
-移動・撤去:
-- attached source follow
-- disposal validation
+Movement and removal:
+- Attached-source following
+- Disposal validation
 
-統合テストで全 action 前後の measurement と map 変化を確認する。
+Integration tests must verify measurement and map changes before and after every action.
 ```
 
-## Prompt 7 — Physics robot execution
+## Prompt 7 — Physics-based robot execution
 
 ```text
-Milestone 7 を実装してください。
+Implement Milestone 7.
 
-実装対象:
+Implementation scope:
 - IsaacPhysicsRobotController
-- measurement mobile robot navigation
-- countermeasure mobile manipulator or base+arm composition
-- end-effector planning
-- grasp/release constraint
-- shield pick-and-place
-- obstacle pick/push
-- contaminated object movement
-- decon tool footprint ray/contact integration
-- settle detection
-- timeout、abort、recovery
+- Mobile measurement-robot navigation
+- Countermeasure mobile manipulator, or composed base and arm
+- End-effector planning
+- Grasp/release constraints
+- Shield pick-and-place
+- Obstacle picking or pushing
+- Contaminated-object movement
+- Decontamination-tool footprint integration from rays or contact
+- Settle detection
+- Timeout, abort, and recovery
 
-要件:
-- deterministic action と同じ API
-- actual USD pose を radiation registry に反映
-- physics execution failure を action result に記録
-- manipulation animation だけでなく radiation state が更新される
+Requirements:
+- Use the same API as deterministic actions.
+- Reflect the actual USD pose in the radiation registry.
+- Record physics-execution failures in the action result.
+- Update radiation state, not only the manipulation animation.
 
-最低 demo:
-1. shield panel を把持し target pose に設置
-2. contaminated box を移動
-3. non-contaminated obstacle をどかす
-4. decon tool で指定 patch を処理
+Minimum demo:
+1. Grasp a shield panel and place it at the target pose.
+2. Move a contaminated box.
+3. Move a non-contaminated obstacle out of the way.
+4. Treat a specified patch with the decontamination tool.
 ```
 
 ## Prompt 8 — Source estimation
 
 ```text
-Milestone 8 を実装してください。
+Implement Milestone 8.
 
-実装対象:
-- CandidateBasis: 3D grid、surface triangle graph
-- measurement stacking
+Implementation scope:
+- CandidateBasis: 3D grid and surface-triangle graph
+- Measurement stacking
 - Poisson negative log likelihood
-- nonnegative MLE
+- Nonnegative MLE
 - L1 proximal solver
-- surface TV regularization
-- coarse grid -> connected components -> continuous MLE refinement
+- Surface total-variation regularization
+- Coarse grid to connected components to continuous MLE refinement
 - Fisher uncertainty
-- optional bootstrap
-- SourceEstimate serialization/visualization
+- Optional bootstrap
+- SourceEstimate serialization and visualization
 
-禁止:
-- TruthState 参照
-- ground-truth source count を solver に与える
+Prohibited:
+- Reading TruthState
+- Supplying the ground-truth source count to the solver
 
-テスト:
-- noiseless/noisy one source
-- two sources
-- hidden surface patch
-- source height variation
-- gradient finite difference
-- uncertainty shape
+Tests:
+- Noiseless and noisy single source
+- Two sources
+- Hidden surface patch
+- Source-height variation
+- Finite-difference gradient
+- Uncertainty shape
 ```
 
-## Prompt 9 — Predicted/observed residual と再推定
+## Prompt 9 — Predicted/observed residuals and re-estimation
 
 ```text
-Milestone 9 を実装してください。
+Implement Milestone 9.
 
-実装対象:
-- nominal action preview on BeliefState clone
-- predicted verification measurement
-- observed verification measurement
-- raw/normalized residual
+Implementation scope:
+- Nominal action preview on a BeliefState clone
+- Predicted verification measurement
+- Observed verification measurement
+- Raw and normalized residuals
 - DeconResidualHypothesis
 - ShieldPoseErrorHypothesis
 - HiddenSourceHypothesis
 - GlobalGainBackgroundHypothesis
 - SourceLocalizationErrorHypothesis
-- likelihood/BIC selection
-- belief update
-- action-effect parameter update
-- residual visualization and logs
+- Likelihood/BIC selection
+- Belief updates
+- Action-effect parameter updates
+- Residual visualization and logs
 
-fault injection tests:
-- 30% decon residual
+Fault-injection tests:
+- 30% decontamination residual
 - 5 cm shield translation error
-- hidden source
-- detector gain bias
-- mixed failure case
+- Hidden source
+- Detector gain bias
+- Mixed failure case
 ```
 
-## Prompt 10 — Planner と closed-loop coordinator
+## Prompt 10 — Planner and closed-loop coordinator
 
 ```text
-Milestone 10 を実装してください。
+Implement Milestone 10.
 
-実装対象:
-- action candidate generators
-- measurement pose candidates
-- decon region candidates
-- shield placement candidates
-- object move/remove candidates
-- repair candidates
-- navigation/manipulation/resource feasibility
-- action objective
-- expected information gain approximation
-- OpenLoop、Greedy、Nearest、Random、Oracle、ClosedLoopResidual planners
+Implementation scope:
+- Action candidate generators
+- Measurement-pose candidates
+- Decontamination-region candidates
+- Shield-placement candidates
+- Object movement/removal candidates
+- Repair candidates
+- Navigation, manipulation, and resource feasibility
+- Action objective
+- Approximate expected information gain
+- OpenLoop, Greedy, Nearest, Random, Oracle, and ClosedLoopResidual planners
 - ClosedLoopCoordinator state machine
-- pause/resume/stop
-- termination conditions
-- snapshot persistence
+- Pause, resume, and stop
+- Termination conditions
+- Snapshot persistence
 
-end-to-end demo:
+End-to-end demo:
 MEASURE -> ESTIMATE -> PLAN -> PREDICT -> EXECUTE -> VERIFY -> DIAGNOSE -> UPDATE -> REPLAN
 
-要件:
-- Oracle 以外は TruthState を参照しない
-- baseline と proposed の同一 seed batch runner
+Requirements:
+- Only Oracle may read TruthState.
+- Run baselines and the proposed planner with the same seed batch runner.
 ```
 
-## Prompt 11 — ROS 2、MoveIt 2、Nav2 adapter
+## Prompt 11 — ROS 2, MoveIt 2, and Nav2 adapters
 
 ```text
-Milestone 11 の ROS 2 部分を実装してください。
+Implement the ROS 2 portion of Milestone 11.
 
-実装対象:
+Implementation scope:
 - radcounter_msgs
-- RadiationMeasurement、SourceEstimate、CountermeasureStatus
+- RadiationMeasurement, SourceEstimate, and CountermeasureStatus
 - MeasureRadiation.action
 - ExecuteCountermeasure.action
-- GetDoseMap/EvaluateCountermeasure services
+- GetDoseMap and EvaluateCountermeasure services
 - Ros2RobotController
-- standard tf/joint_states/cmd_vel/trajectory integration
+- Standard tf, joint_states, cmd_vel, and trajectory integration
 - MoveIt 2 manipulation adapter
 - Nav2 navigation adapter
-- namespace/multi-robot support
+- Namespace and multi-robot support
 
-要件:
-- ROS 2 なしでも core と GUI が動く optional dependency
-- Jazzy を primary target
-- simulated time を使用
-- timeout と QoS を設定ファイル化
+Requirements:
+- ROS 2 must remain an optional dependency; the core and GUI work without it.
+- Target Jazzy primarily.
+- Use simulated time.
+- Configure timeouts and QoS in configuration files.
 ```
 
-## Prompt 12 — 実験自動化、性能、文書、リリース
+## Prompt 12 — Experiment automation, performance, documentation, and release
 
 ```text
-最終 milestone を実装してください。
+Implement the final milestone.
 
-実装対象:
-- headless batch runner
-- seed sweep
-- baseline sweep
-- output parquet/json/npz
+Implementation scope:
+- Headless batch runner
+- Seed sweep
+- Baseline sweep
+- Parquet, JSON, and NPZ output
 - HTML report
-- git/config/asset/hardware manifest
-- benchmark suite
-- regression baselines
-- API docs
-- scenario authoring guide
-- troubleshooting
-- one-command demo scripts
+- Git, configuration, asset, and hardware manifest
+- Benchmark suite
+- Regression baselines
+- API documentation
+- Scenario authoring guide
+- Troubleshooting guide
+- One-command demo scripts
 
-生成する実験:
-1. analytic radiation validation
-2. decon primitive
-3. shield primitive
-4. movable contaminated object
-5. hidden source residual
-6. closed-loop vs open-loop
-7. resource-constrained multi-action
+Generate these experiments:
+1. Analytic radiation validation
+2. Decontamination primitive
+3. Shielding primitive
+4. Movable contaminated object
+5. Hidden-source residual
+6. Closed-loop versus open-loop
+7. Resource-constrained multi-action workflow
 
-最終確認:
-- Definition of Done 全項目を checklist 化
-- 未実装項目を明示
-- versioned release tag 用 changelog を作る
+Final checks:
+- Convert every Definition of Done item into a checklist.
+- Identify every unimplemented item.
+- Create a changelog suitable for a versioned release tag.
 ```

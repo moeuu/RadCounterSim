@@ -55,12 +55,8 @@ def test_minimap_projection_uses_padded_square_and_inverts_world_y() -> None:
     lower, upper = padded_square_bounds((-2.0, -1.0), (2.0, 1.0), padding_fraction=0.0)
     assert lower == (-2.0, -2.0)
     assert upper == (2.0, 2.0)
-    assert project_minimap_point((0.0, 0.0, 0.0), lower, upper) == pytest.approx(
-        (0.0, 0.0, 0.0)
-    )
-    assert project_minimap_point((2.0, 2.0, 0.0), lower, upper) == pytest.approx(
-        (0.9, -0.9, 0.0)
-    )
+    assert project_minimap_point((0.0, 0.0, 0.0), lower, upper) == pytest.approx((0.0, 0.0, 0.0))
+    assert project_minimap_point((2.0, 2.0, 0.0), lower, upper) == pytest.approx((0.9, -0.9, 0.0))
 
 
 def test_progress_from_remaining_is_bounded() -> None:
@@ -72,27 +68,26 @@ def test_progress_from_remaining_is_bounded() -> None:
 def test_isaac_monitor_declares_all_operator_views_and_single_viewport_policy() -> None:
     root = Path(__file__).resolve().parents[2]
     monitor = (
-        root
-        / "source/extensions/radcounter.isaac/radcounter/isaac/ui/robot_monitor.py"
+        root / "source/extensions/radcounter.isaac/radcounter/isaac/ui/robot_monitor.py"
     ).read_text(encoding="utf-8")
     dashboard = (
         root / "source/extensions/radcounter.isaac/radcounter/isaac/ui/dashboard.py"
     ).read_text(encoding="utf-8")
 
-    assert "ACTIVE / 作業中" in monitor
-    assert "BUILDING OVERVIEW / 建屋俯瞰" in monitor
+    assert "ACTIVE ROBOT" in monitor
+    assert "BUILDING OVERVIEW" in monitor
     assert 'self._activate_camera("follow")' in monitor
     assert 'self._activate_camera("onboard")' in monitor
     assert 'self._activate_camera("work")' in monitor
     assert 'phase == "decontaminating"' in monitor
     assert "and not self._work_view_triggered" in monitor
     assert '"single_rendered_viewport": True' in monitor
-    assert "MONITOR_UPDATE_HZ = 12.0" in (
-        root / "radcounter/core/robot_monitoring.py"
-    ).read_text(encoding="utf-8")
-    assert '"見る"' in dashboard
+    assert "MONITOR_UPDATE_HZ = 12.0" in (root / "radcounter/core/robot_monitoring.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"View"' in dashboard
     assert "self._robot_monitor.follow_robot" in dashboard
-    assert '"搭載"' in dashboard
+    assert '"Onboard"' in dashboard
     assert "self._robot_monitor.onboard_robot" in dashboard
     assert "update_countermeasure_progress" in dashboard
     assert "with ui.ScrollingFrame(" in dashboard

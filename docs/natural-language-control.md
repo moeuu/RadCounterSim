@@ -1,6 +1,6 @@
 # Natural-language application control
 
-RadCounterSim accepts Japanese and English instructions through one local,
+RadCounterSim accepts English instructions through one local,
 schema-constrained command surface. The language model proposes a plan; it
 never receives direct Python, shell, USD, or robot-controller access.
 
@@ -66,11 +66,11 @@ uv run python scripts/install_desktop_entry.py
 
 Examples:
 
-- `保護区域へ移動して2秒測定して`
-- `汚染表面を除染して、その後測定して`
-- `不規則な壁面線源を除染率70%以上になるまで最大3回除染して`
-- `遮蔽体を線源から保護区域への25%位置へ配置し、その後65%位置へ再配置して`
-- `すべての測定地点を順番に回って各地点で2秒測定して`
+- `Move to the protected area and measure for 2 seconds.`
+- `Decontaminate the contaminated surface, then measure.`
+- `Decontaminate the irregular wall source up to three times until at least 70% is removed.`
+- `Place the shield at 25% of the source-to-protected-area line, then move it to 65%.`
+- `Visit every measurement station in order and measure for 2 seconds at each station.`
 - `Pause the simulation.`
 - `Move the contaminated drum to the disposal area.`
 

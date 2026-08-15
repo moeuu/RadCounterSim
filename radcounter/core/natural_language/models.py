@@ -30,15 +30,9 @@ class CommandName(StrEnum):
 class CompletionCriterion(StrEnum):
     """Public-result predicates allowed to stop a bounded repeated step."""
 
-    DECONTAMINATION_REMOVED_FRACTION_AT_LEAST = (
-        "decontamination_removed_fraction_at_least"
-    )
-    DECONTAMINATION_REMAINING_FRACTION_AT_MOST = (
-        "decontamination_remaining_fraction_at_most"
-    )
-    DECONTAMINATION_COVERAGE_FRACTION_AT_LEAST = (
-        "decontamination_coverage_fraction_at_least"
-    )
+    DECONTAMINATION_REMOVED_FRACTION_AT_LEAST = "decontamination_removed_fraction_at_least"
+    DECONTAMINATION_REMAINING_FRACTION_AT_MOST = "decontamination_remaining_fraction_at_most"
+    DECONTAMINATION_COVERAGE_FRACTION_AT_LEAST = "decontamination_coverage_fraction_at_least"
     MEASURED_RATE_CPS_AT_MOST = "measured_rate_cps_at_most"
     SHIELD_PLACEMENT_ERROR_M_AT_MOST = "shield_placement_error_m_at_most"
 
@@ -53,11 +47,15 @@ class StepCompletionCondition(BaseModel):
 
     @model_validator(mode="after")
     def validate_threshold_units(self) -> StepCompletionCondition:
-        if self.criterion in {
-            CompletionCriterion.DECONTAMINATION_REMOVED_FRACTION_AT_LEAST,
-            CompletionCriterion.DECONTAMINATION_REMAINING_FRACTION_AT_MOST,
-            CompletionCriterion.DECONTAMINATION_COVERAGE_FRACTION_AT_LEAST,
-        } and self.threshold > 1.0:
+        if (
+            self.criterion
+            in {
+                CompletionCriterion.DECONTAMINATION_REMOVED_FRACTION_AT_LEAST,
+                CompletionCriterion.DECONTAMINATION_REMAINING_FRACTION_AT_MOST,
+                CompletionCriterion.DECONTAMINATION_COVERAGE_FRACTION_AT_LEAST,
+            }
+            and self.threshold > 1.0
+        ):
             raise ValueError("fraction completion thresholds must be between zero and one")
         return self
 
@@ -135,7 +133,7 @@ class CommandPlan(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    language: Literal["ja", "en", "mixed", "unknown"] = "unknown"
+    language: Literal["en"] = "en"
     summary: str = Field(min_length=1, max_length=600)
     steps: tuple[CommandStep, ...] = Field(min_length=1, max_length=24)
 
@@ -193,9 +191,7 @@ def validate_command_plan(
                     f"step {index} uses a completion condition that does not apply to measurement"
                 )
             if step.max_attempts > 1:
-                warnings.append(
-                    f"Bounded repeated measurement: up to {step.max_attempts} attempts"
-                )
+                warnings.append(f"Bounded repeated measurement: up to {step.max_attempts} attempts")
             continue
         if step.command != CommandName.EXECUTE_CANDIDATE:
             continue
@@ -213,14 +209,9 @@ def validate_command_plan(
         shield_retry = (
             candidate.action_type in {"place_shield", "move_shield"}
             and step.until is not None
-            and step.until.criterion
-            == CompletionCriterion.SHIELD_PLACEMENT_ERROR_M_AT_MOST
+            and step.until.criterion == CompletionCriterion.SHIELD_PLACEMENT_ERROR_M_AT_MOST
         )
-        if (
-            step.max_attempts > 1
-            and candidate.action_type != "decontaminate"
-            and not shield_retry
-        ):
+        if step.max_attempts > 1 and candidate.action_type != "decontaminate" and not shield_retry:
             raise PlanValidationError(
                 f"step {index} repeats {candidate.action_type}; repeat one decontamination "
                 "candidate or use explicit ordered steps for physical repositioning"
@@ -235,15 +226,18 @@ def validate_command_plan(
                 CompletionCriterion.SHIELD_PLACEMENT_ERROR_M_AT_MOST,
             }
             if (
-                step.until.criterion in decon_criteria
-                and candidate.action_type != "decontaminate"
-            ) or (
-                step.until.criterion in shield_criteria
-                and candidate.action_type not in {"place_shield", "move_shield"}
-            ) or step.until.criterion == CompletionCriterion.MEASURED_RATE_CPS_AT_MOST:
+                (
+                    step.until.criterion in decon_criteria
+                    and candidate.action_type != "decontaminate"
+                )
+                or (
+                    step.until.criterion in shield_criteria
+                    and candidate.action_type not in {"place_shield", "move_shield"}
+                )
+                or step.until.criterion == CompletionCriterion.MEASURED_RATE_CPS_AT_MOST
+            ):
                 raise PlanValidationError(
-                    f"step {index} completion condition does not apply to "
-                    f"{candidate.action_type}"
+                    f"step {index} completion condition does not apply to {candidate.action_type}"
                 )
         if step.max_attempts > 1:
             warnings.append(
@@ -253,8 +247,6 @@ def validate_command_plan(
         warnings.append(f"Physical action: {candidate.label}")
     return ValidatedCommandPlan(
         plan=plan,
-        requires_confirmation=any(
-            step.command in _CONFIRMATION_COMMANDS for step in plan.steps
-        ),
+        requires_confirmation=any(step.command in _CONFIRMATION_COMMANDS for step in plan.steps),
         warnings=tuple(warnings),
     )

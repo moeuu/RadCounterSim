@@ -99,7 +99,6 @@ class RadCounterDashboard:
             "Local command model starts when the first instruction is submitted."
         )
         self._command_preview = ui.SimpleStringModel(
-            "例: 保護区域へ移動して2秒測定して\n"
             "Example: Move to the protected area and measure for 2 seconds."
         )
         self._workflow_services: Any | None = None
@@ -108,7 +107,7 @@ class RadCounterDashboard:
         self._physical_command_queue: list[
             tuple[CommandStep, asyncio.Future[dict[str, object]]]
         ] = []
-        self._navigation_status_prefix = "測定ロボット移動中"
+        self._navigation_status_prefix = "Measurement robot moving"
         from ..natural_language import NaturalLanguageCommandController
 
         self._natural_language = NaturalLanguageCommandController(
@@ -128,9 +127,6 @@ class RadCounterDashboard:
         self._window.deferred_dock_in("Stage", ui.DockPolicy.CURRENT_WINDOW_IS_ACTIVE)
 
     def _operator_style(self, **properties: object) -> dict[str, object]:
-        # The app-level custom font owns the Japanese glyph region. Supplying a
-        # font path here would create another font instance with the default
-        # Latin-only region and turn CJK text into question marks.
         return properties
 
     def _build(self) -> None:
@@ -154,7 +150,8 @@ class RadCounterDashboard:
                 style={"font_size": 11, "color": 0xFFE3B341},
             )
             ui.Label(
-                "ロボット作業を日本語またはEnglishで指示してください。構成変更は下の選択欄で行います。",
+                "Describe the robot task in English. Change the environment, robot, "
+                "and detector with the selectors below.",
                 word_wrap=True,
                 style=self._operator_style(font_size=12, color=0xFFB8BDC3),
             )
@@ -165,13 +162,13 @@ class RadCounterDashboard:
             )
             with ui.HStack(height=34, spacing=8):
                 self._command_run_button = ui.Button(
-                    "1. Interpret / 解釈",
+                    "1. Interpret",
                     width=150,
                     clicked_fn=self._submit_natural_language,
                     style=self._operator_style(font_size=12),
                 )
                 self._command_confirm_button = ui.Button(
-                    "2. Confirm & run / 確認実行",
+                    "2. Confirm & run",
                     width=250,
                     clicked_fn=self._confirm_natural_language,
                     style=self._operator_style(
@@ -294,18 +291,19 @@ class RadCounterDashboard:
 
     def _build_robot_monitor_controls(self) -> None:
         ui.Label(
-            "ROBOT MONITOR / ロボット監視",
+            "ROBOT MONITOR",
             style={"font_size": 11, "color": 0xFF6CB6FF},
         )
         ui.Label(
-            "「見る」で追従、「搭載」でロボット視点。カメラを手動操作すると追従を解除します。",
+            "Select View to follow a robot or Onboard for its camera. Manual camera "
+            "movement disables tracking.",
             word_wrap=True,
             style=self._operator_style(font_size=12, color=0xFFB8BDC3),
         )
         with ui.HStack(height=30, spacing=8):
-            ui.Button("建屋俯瞰", clicked_fn=self._robot_monitor.overview)
+            ui.Button("Building overview", clicked_fn=self._robot_monitor.overview)
             ui.Button(
-                "追従解除 / Free",
+                "Free camera",
                 clicked_fn=self._robot_monitor.stop_follow,
             )
         self._robot_list_frame = ui.Frame(height=0)
@@ -315,7 +313,7 @@ class RadCounterDashboard:
         robots = self._robot_monitor.robots
         if not robots:
             ui.Label(
-                "現在の構成にロボットはありません。",
+                "The current configuration has no robots.",
                 style=self._operator_style(font_size=12, color=0xFF8E989F),
             )
             return
@@ -325,11 +323,7 @@ class RadCounterDashboard:
                 with ui.HStack(height=30, spacing=6):
                     ui.Rectangle(
                         width=5,
-                        style={
-                            "background_color": (
-                                0xFFF4BD55 if active else 0xFF48545C
-                            )
-                        },
+                        style={"background_color": (0xFFF4BD55 if active else 0xFF48545C)},
                     )
                     ui.Label(
                         ("● " if active else "○ ") + robot.display_name,
@@ -340,14 +334,14 @@ class RadCounterDashboard:
                         ),
                     )
                     ui.Button(
-                        "見る",
+                        "View",
                         width=84,
-                        clicked_fn=lambda robot_id=robot.robot_id: (
-                            self._robot_monitor.follow_robot(robot_id)
+                        clicked_fn=lambda robot_id=robot.robot_id: self._robot_monitor.follow_robot(
+                            robot_id
                         ),
                     )
                     ui.Button(
-                        "搭載",
+                        "Onboard",
                         width=84,
                         clicked_fn=lambda robot_id=robot.robot_id: (
                             self._robot_monitor.onboard_robot(robot_id)
@@ -384,11 +378,11 @@ class RadCounterDashboard:
     def _build_system_selector(self) -> None:
         selection = self._active_system_selection
         ui.Label(
-            "SYSTEM CONFIGURATION / 構成",
+            "SYSTEM CONFIGURATION",
             style={"font_size": 11, "color": 0xFF6CB6FF},
         )
         ui.Label(
-            "プリセットを選ぶか、環境・ロボット・検出器を個別に組み合わせます。",
+            "Choose a preset or select the environment, robot, and detector independently.",
             word_wrap=True,
             style=self._operator_style(font_size=12, color=0xFFB8BDC3),
         )
@@ -440,7 +434,7 @@ class RadCounterDashboard:
             combo.model.add_item_changed_fn(self._on_component_choice_changed)
         with ui.HStack(height=34, spacing=8):
             self._system_apply_button = ui.Button(
-                "選択した構成を適用 / Apply",
+                "Apply selected configuration",
                 clicked_fn=self._apply_system_selection,
                 style=self._operator_style(
                     font_size=12,
@@ -448,7 +442,7 @@ class RadCounterDashboard:
                     color=0xFFF6F8FA,
                 ),
             )
-            ui.Button("現在値に戻す", width=110, clicked_fn=self._restore_system_selection)
+            ui.Button("Restore current", width=110, clicked_fn=self._restore_system_selection)
         _bound_label(
             self._system_summary,
             self._label_subscriptions,
@@ -480,11 +474,11 @@ class RadCounterDashboard:
         try:
             selection = self._resolve_system_draft()
         except Exception as exc:
-            self._system_summary.set_value(f"組み合わせを変更してください: {exc}")
+            self._system_summary.set_value(f"Choose a different combination: {exc}")
             if hasattr(self, "_system_apply_button"):
                 self._system_apply_button.enabled = False
             return
-        readiness = "準備済み" if selection.environment_ready else "環境データ未準備"
+        readiness = "Ready" if selection.environment_ready else "Environment data unavailable"
         self._system_summary.set_value(
             f"{selection.environment_entry.display_name} · "
             f"{selection.robot_set.display_name} · {selection.detector_set.display_name}\n"
@@ -494,9 +488,9 @@ class RadCounterDashboard:
             can_prepare = bool(selection.environment_preparation_scripts)
             self._system_apply_button.enabled = selection.environment_ready or can_prepare
             self._system_apply_button.text = (
-                "選択した構成を適用 / Apply"
+                "Apply selected configuration"
                 if selection.environment_ready
-                else "環境を準備して適用 / Prepare"
+                else "Prepare environment and apply"
             )
 
     def _on_profile_choice_changed(self, *_args: Any) -> None:
@@ -554,14 +548,14 @@ class RadCounterDashboard:
         scripts = selection.environment_preparation_scripts
         if not scripts:
             raise FileNotFoundError(
-                selection.environment_entry.setup_hint or "環境データがありません"
+                selection.environment_entry.setup_hint or "Environment data is unavailable"
             )
         project_python = self.root / ".venv/bin/python"
         python = project_python if project_python.is_file() else Path(sys.executable)
         for index, script in enumerate(scripts, start=1):
             if script.suffix != ".py" or self.root not in script.parents or not script.is_file():
-                raise ValueError(f"許可されていない環境準備スクリプトです: {script}")
-            self._status.set_value(f"環境を準備中です ({index}/{len(scripts)}): {script.stem}")
+                raise ValueError(f"Environment preparation script is not allowed: {script}")
+            self._status.set_value(f"Preparing environment ({index}/{len(scripts)}): {script.stem}")
             process = await asyncio.create_subprocess_exec(
                 str(python),
                 str(script),
@@ -576,7 +570,8 @@ class RadCounterDashboard:
         prepared = self._resolve_system_draft()
         if not prepared.environment_ready:
             raise FileNotFoundError(
-                f"環境準備後もデータが見つかりません: {prepared.environment_source_path}"
+                "Environment data is still unavailable after preparation: "
+                f"{prepared.environment_source_path}"
             )
         return prepared
 
@@ -584,13 +579,13 @@ class RadCounterDashboard:
         try:
             selection = self._resolve_system_draft()
         except Exception as exc:
-            self._status.set_value(f"構成を適用できません: {type(exc).__name__}: {exc}")
+            self._status.set_value(f"Cannot apply configuration: {type(exc).__name__}: {exc}")
             self._update_system_preview()
             return
         self._set_system_controls_enabled(False)
         self._natural_language.cancel()
         omni.timeline.get_timeline_interface().pause()
-        self._status.set_value(f"{selection.profile.display_name} を構成中です…")
+        self._status.set_value(f"Configuring {selection.profile.display_name}...")
         try:
             if not selection.environment_ready:
                 selection = await self._prepare_selected_environment(selection)
@@ -649,9 +644,9 @@ class RadCounterDashboard:
             self._sync_system_controls(selection)
             if not selection.configurable:
                 self._robot_monitor.configure(selection)
-            self._status.set_value(f"構成を適用しました: {selection.profile.display_name}")
+            self._status.set_value(f"Configuration applied: {selection.profile.display_name}")
         except Exception as exc:
-            self._status.set_value(f"構成の適用に失敗しました: {type(exc).__name__}: {exc}")
+            self._status.set_value(f"Failed to apply configuration: {type(exc).__name__}: {exc}")
         finally:
             self._set_system_controls_enabled(True)
             self._update_system_preview()
@@ -740,10 +735,9 @@ class RadCounterDashboard:
         if unmet_conditions:
             last = unmet_conditions[-1]
             return (
-                "設定された最大試行回数まで安全に実行しましたが、終了条件は未達です: "
-                f"{last.get('criterion')} observed={last.get('observed')} "
-                f"target={last.get('threshold')}。 / Bounded workflow stopped at its "
-                "attempt limit; the completion condition was not met."
+                "The bounded workflow stopped at its attempt limit without meeting "
+                f"the completion condition: {last.get('criterion')} "
+                f"observed={last.get('observed')} target={last.get('threshold')}."
             )
         if motions:
             distances = [
@@ -753,16 +747,17 @@ class RadCounterDashboard:
             ]
             final = motions[-1].get("final_position_m")
             measurement = (
-                "" if measurement_duration_s is None else f" → {measurement_duration_s:g}秒測定"
+                ""
+                if measurement_duration_s is None
+                else f" -> measured for {measurement_duration_s:g} seconds"
             )
             if returned_home and len(distances) >= 2:
                 final_text = ""
                 if isinstance(final, (tuple, list)) and len(final) >= 2:
-                    final_text = f" 最終位置 ({float(final[0]):.2f}, {float(final[1]):.2f})。"
+                    final_text = f" Final position ({float(final[0]):.2f}, {float(final[1]):.2f})."
                 return (
-                    f"3工程完了: {distances[0]:.2f} m移動{measurement} → "
-                    f"開始位置へ{distances[-1]:.2f} m帰還。{final_text} "
-                    "/ Move, measure, and return completed."
+                    f"Three steps complete: moved {distances[0]:.2f} m{measurement}, "
+                    f"then returned {distances[-1]:.2f} m to the start.{final_text}"
                 )
             initial = motions[0].get("initial_position_m")
             if (
@@ -773,12 +768,11 @@ class RadCounterDashboard:
                 and distances
             ):
                 return (
-                    f"移動 {distances[0]:.2f} m完了: "
+                    f"Moved {distances[0]:.2f} m: "
                     f"({float(initial[0]):.2f}, {float(initial[1]):.2f}) → "
-                    f"({float(final[0]):.2f}, {float(final[1]):.2f}){measurement}。 "
-                    "/ Command completed."
+                    f"({float(final[0]):.2f}, {float(final[1]):.2f}){measurement}."
                 )
-        return "移動と測定が完了しました。 / Command completed."
+        return "Movement and measurement completed."
 
     def update_navigation_progress(
         self,
@@ -791,9 +785,9 @@ class RadCounterDashboard:
 
         self._command_status.set_value(
             f"{self._navigation_status_prefix}: step {step} · "
-            f"位置 ({position_m[0]:.2f}, {position_m[1]:.2f}) → "
-            f"目標 ({target_xy_m[0]:.2f}, {target_xy_m[1]:.2f}) · "
-            f"残り {remaining_m:.2f} m"
+            f"position ({position_m[0]:.2f}, {position_m[1]:.2f}) -> "
+            f"target ({target_xy_m[0]:.2f}, {target_xy_m[1]:.2f}) · "
+            f"{remaining_m:.2f} m remaining"
         )
         self._robot_monitor.update_navigation_progress(
             position_m=position_m,
@@ -813,9 +807,7 @@ class RadCounterDashboard:
         raw_instruction = self._command_input.get_value_as_string()
         instruction = normalize_operator_instruction(raw_instruction)
         if not instruction:
-            self._command_status.set_value(
-                "日本語またはEnglishで指示を入力してください。 / Enter an instruction."
-            )
+            self._command_status.set_value("Enter an instruction in English.")
             return
         self._command_input.set_value("")
         self._natural_language.cancel()
@@ -833,27 +825,23 @@ class RadCounterDashboard:
         duplicate_removed: bool = False,
     ) -> None:
         self._set_command_busy(True)
-        prefix = "重複入力を1件に整理しました。" if duplicate_removed else ""
-        self._command_status.set_value(
-            f"{prefix}ローカルLLMで解釈中です… / Interpreting with the local model..."
-        )
+        prefix = "Duplicate input was reduced to one copy. " if duplicate_removed else ""
+        self._command_status.set_value(f"{prefix}Interpreting with the local model...")
         self._command_preview.set_value(instruction)
         try:
             submission = await self._natural_language.submit(instruction)
             self._command_preview.set_value(self._format_command_plan(submission))
             if submission.executed:
-                self._command_status.set_value("実行完了。 / Command completed.")
+                self._command_status.set_value("Command completed.")
             else:
                 self._command_status.set_value(
-                    "解釈完了。ロボットを動かすには黄色の「2. Confirm & run / 確認実行」"
-                    "を押してください。"
+                    "Interpretation complete. Select the yellow '2. Confirm & run' "
+                    "button to move the robot."
                 )
                 self._command_confirm_button.enabled = True
                 self._command_cancel_button.enabled = True
         except Exception as exc:
-            self._command_status.set_value(
-                f"指示を解釈できませんでした。 / Command rejected: {type(exc).__name__}: {exc}"
-            )
+            self._command_status.set_value(f"Command rejected: {type(exc).__name__}: {exc}")
         finally:
             self._command_run_button.enabled = True
 
@@ -862,15 +850,13 @@ class RadCounterDashboard:
 
     async def _execute_confirmed_natural_language(self) -> None:
         self._set_command_busy(True)
-        self._command_status.set_value("確認済みの動作を実行中です… / Executing operation...")
+        self._command_status.set_value("Executing confirmed operation...")
         try:
             submission = await self._natural_language.confirm()
             self._command_preview.set_value(self._format_command_plan(submission))
             self._command_status.set_value(self._format_command_completion(submission))
         except Exception as exc:
-            self._command_status.set_value(
-                f"実行に失敗しました。 / Execution failed: {type(exc).__name__}: {exc}"
-            )
+            self._command_status.set_value(f"Execution failed: {type(exc).__name__}: {exc}")
         finally:
             self._command_run_button.enabled = True
             self._command_confirm_button.enabled = False
@@ -880,7 +866,7 @@ class RadCounterDashboard:
         self._natural_language.cancel()
         self._command_confirm_button.enabled = False
         self._command_cancel_button.enabled = False
-        self._command_status.set_value("保留中の動作を取り消しました。 / Operation cancelled.")
+        self._command_status.set_value("Pending operation cancelled.")
 
     async def submit_natural_language_instruction(
         self,
@@ -1138,7 +1124,7 @@ class RadCounterDashboard:
         self._workflow_services = services
         self._workflow_belief = belief
         self._refresh_command_candidates()
-        self._command_status.set_value("Natural-language control is ready · 日本語 / English")
+        self._command_status.set_value("English natural-language control is ready")
 
     @staticmethod
     def _candidate_label(candidate: Any) -> str:
@@ -1147,15 +1133,13 @@ class RadCounterDashboard:
         if action.target_prim_path:
             target = Path(str(action.target_prim_path)).name
         labels = {
-            "measure": (
-                "測定地点へ移動（測定は別ステップ） / move only; measuring requires a measure step"
-            ),
-            "decontaminate": "除染 / decontaminate",
-            "place_shield": "遮蔽体を配置 / place shield",
-            "move_shield": "遮蔽体を移動 / move shield",
-            "move_object": "物体を移動 / move object",
-            "remove_object": "物体を撤去 / remove object",
-            "repair_action": "修復動作 / repair action",
+            "measure": "move to station; measuring requires a separate step",
+            "decontaminate": "decontaminate",
+            "place_shield": "place shield",
+            "move_shield": "move shield",
+            "move_object": "move object",
+            "remove_object": "remove object",
+            "repair_action": "repair action",
         }
         action_type = str(action.action_type)
         details: list[str] = []
@@ -1301,7 +1285,7 @@ class RadCounterDashboard:
             )
         action = candidate.action
         if action.action_type == ActionType.MEASURE:
-            self._navigation_status_prefix = "測定地点へ移動中"
+            self._navigation_status_prefix = "Moving to measurement station"
         self._robot_monitor.begin_action(action)
         try:
             prediction = services.preview(action, belief)
@@ -1336,10 +1320,10 @@ class RadCounterDashboard:
         controller = None if services is None else getattr(services, "measurement_controller", None)
         if controller is None:
             raise RuntimeError("measurement robot controller is not initialized")
-        self._navigation_status_prefix = "測定ロボットが開始位置へ帰還中"
+        self._navigation_status_prefix = "Measurement robot returning to start"
         self._robot_monitor.begin_operation(
             robot_id="measurement",
-            operation="開始位置へ帰還",
+            operation="Return to start",
             phase="returning_home",
         )
         try:

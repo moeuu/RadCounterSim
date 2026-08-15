@@ -24,28 +24,28 @@ _REFERENCE_ROBOT_NAMES = {
 }
 
 _ACTION_LABELS = {
-    "measure": "測定地点へ移動",
-    "decontaminate": "除染",
-    "place_shield": "遮蔽体を配置",
-    "move_shield": "遮蔽体を移動",
-    "move_object": "物体を移動",
-    "remove_object": "物体を撤去",
-    "repair_action": "修復作業",
+    "measure": "Move to measurement station",
+    "decontaminate": "Decontaminate",
+    "place_shield": "Place shield",
+    "move_shield": "Move shield",
+    "move_object": "Move object",
+    "remove_object": "Remove object",
+    "repair_action": "Repair operation",
 }
 
 _PHASE_LABELS = {
-    "idle": "待機中",
-    "navigating": "移動中",
-    "stowing_arm": "アーム収納中",
-    "arm_stowed": "アーム収納完了",
-    "approaching": "作業面へ接近中",
-    "contact_confirmed": "接触確認済み",
-    "decontaminating": "除染中",
-    "grasping": "把持中",
-    "releasing": "解放中",
-    "returning_home": "開始位置へ帰還中",
-    "complete": "完了",
-    "failed": "失敗",
+    "idle": "Idle",
+    "navigating": "Navigating",
+    "stowing_arm": "Stowing arm",
+    "arm_stowed": "Arm stowed",
+    "approaching": "Approaching work surface",
+    "contact_confirmed": "Contact confirmed",
+    "decontaminating": "Decontaminating",
+    "grasping": "Grasping",
+    "releasing": "Releasing",
+    "returning_home": "Returning to start",
+    "complete": "Complete",
+    "failed": "Failed",
 }
 
 

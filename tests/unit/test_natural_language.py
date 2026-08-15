@@ -118,8 +118,8 @@ def test_command_plan_rejects_free_form_arguments() -> None:
     with pytest.raises(ValidationError):
         CommandPlan.model_validate(
             {
-                "language": "ja",
-                "summary": "任意コードを実行",
+                "language": "en",
+                "summary": "Run arbitrary code",
                 "steps": [{"command": "run_python", "code": "print('unsafe')"}],
             }
         )
@@ -127,8 +127,8 @@ def test_command_plan_rejects_free_form_arguments() -> None:
 
 def test_host_validation_resolves_scene_candidates_and_confirmation() -> None:
     plan = CommandPlan(
-        language="ja",
-        summary="保護区域で測定します",
+        language="en",
+        summary="Measure in the protected area",
         steps=(
             CommandStep(
                 command=CommandName.EXECUTE_CANDIDATE,
@@ -215,9 +215,9 @@ def test_llama_schema_is_inlined_and_does_not_expose_truth() -> None:
     assert "execute_candidate" in encoded
 
 
-def test_explicit_bilingual_measurement_is_not_lost_after_navigation() -> None:
+def test_explicit_english_measurement_is_not_lost_after_navigation() -> None:
     incomplete = CommandPlan(
-        language="unknown",
+        language="en",
         summary="Move to the station",
         steps=(
             CommandStep(
@@ -226,13 +226,13 @@ def test_explicit_bilingual_measurement_is_not_lost_after_navigation() -> None:
             ),
         ),
     )
-    japanese = _normalize_plan(
+    concise = _normalize_plan(
         incomplete,
-        "測定ロボットを保護区域へ移動して2秒測定して",
+        "Move the measurement robot to the protected area and measure for 2 seconds",
         _context(),
     )
-    assert japanese.language == "ja"
-    assert japanese.steps[-1] == CommandStep(command=CommandName.MEASURE, duration_s=2.0)
+    assert concise.language == "en"
+    assert concise.steps[-1] == CommandStep(command=CommandName.MEASURE, duration_s=2.0)
 
     english = _normalize_plan(
         incomplete,
@@ -243,8 +243,8 @@ def test_explicit_bilingual_measurement_is_not_lost_after_navigation() -> None:
     assert english.steps[-1] == CommandStep(command=CommandName.MEASURE, duration_s=3.0)
 
     model_kept_measure_but_lost_duration = CommandPlan(
-        language="ja",
-        summary="移動して測定",
+        language="en",
+        summary="Move and measure",
         steps=(
             CommandStep(
                 command=CommandName.EXECUTE_CANDIDATE,
@@ -255,7 +255,7 @@ def test_explicit_bilingual_measurement_is_not_lost_after_navigation() -> None:
     )
     repaired_duration = _normalize_plan(
         model_kept_measure_but_lost_duration,
-        "保護区域へ移動して2秒測定して",
+        "Move to the protected area and measure for 2 seconds",
         _context(),
     )
     assert repaired_duration.steps[-1].duration_s == 2.0
@@ -297,10 +297,10 @@ def test_explicit_move_measure_return_is_repaired_to_three_ordered_steps() -> No
 
 
 def test_operator_instruction_collapses_only_triple_or_more_exact_repetitions() -> None:
-    japanese = "測定ロボットを保護区域へ移動して2秒測定して"
-    assert normalize_operator_instruction(japanese * 3) == japanese
-    assert normalize_operator_instruction(japanese * 5) == japanese
-    assert normalize_operator_instruction(japanese * 2) == japanese * 2
+    instruction = "Move the measurement robot to the protected area and measure for 2 seconds."
+    assert normalize_operator_instruction(instruction * 3) == instruction
+    assert normalize_operator_instruction(instruction * 5) == instruction
+    assert normalize_operator_instruction(instruction * 2) == instruction * 2
     assert normalize_operator_instruction("Pause the simulation") == "Pause the simulation"
 
 
@@ -357,9 +357,7 @@ def test_infeasible_shield_choice_is_replaced_by_host_verified_safe_candidate() 
         _shield_clearance_context(),
     )
     assert normalized.steps[0].candidate_id == "shield-world-leadshield-65"
-    assert validate_command_plan(
-        normalized, _shield_clearance_context()
-    ).requires_confirmation
+    assert validate_command_plan(normalized, _shield_clearance_context()).requires_confirmation
 
 
 def test_explicit_decontamination_repairs_small_model_refusal() -> None:
@@ -376,13 +374,14 @@ def test_explicit_decontamination_repairs_small_model_refusal() -> None:
         ),
     )
     refusal = CommandPlan(
-        language="ja",
-        summary="対象を特定できません",
+        language="en",
+        summary="The target could not be identified",
         steps=(CommandStep(command=CommandName.SHOW_STATUS),),
     )
     normalized = _normalize_plan(
         refusal,
-        "障害物を避けて面状線源のある汚染作業台へ移動し、表面全体を除染して",
+        "Avoid the obstacle, move to the contaminated work surface, and decontaminate "
+        "the entire surface source",
         context,
     )
     assert normalized.steps == (
@@ -412,8 +411,8 @@ def test_decontamination_verification_collapses_redundant_small_model_steps() ->
         ),
     )
     redundant = CommandPlan(
-        language="ja",
-        summary="除染して測定します",
+        language="en",
+        summary="Decontaminate and measure",
         steps=(
             CommandStep(command=CommandName.SHOW_STATUS),
             CommandStep(
@@ -430,7 +429,7 @@ def test_decontamination_verification_collapses_redundant_small_model_steps() ->
     )
     normalized = _normalize_plan(
         redundant,
-        "面状線源を除染してから保護区域へ移動して5秒測定してください",
+        "Decontaminate the surface source, move to the protected area, and measure for 5 seconds",
         context,
     )
     assert normalized.steps == (
@@ -474,8 +473,8 @@ def test_complex_decon_measure_return_status_is_ordered_by_operator_semantics() 
         ),
     )
     out_of_order = CommandPlan(
-        language="ja",
-        summary="複合工程",
+        language="en",
+        summary="Combined workflow",
         steps=(
             CommandStep(
                 command=CommandName.EXECUTE_CANDIDATE,
@@ -500,7 +499,8 @@ def test_complex_decon_measure_return_status_is_ordered_by_operator_semantics() 
     )
     normalized = _normalize_plan(
         out_of_order,
-        "面状線源を除染し、その後別棟の除染室で5秒測定し、開始位置へ戻して状態を表示",
+        "Decontaminate the surface source, then measure for 5 seconds in the remote "
+        "decontamination room, return to the starting position, and show status",
         context,
     )
     assert normalized.steps == (
@@ -551,16 +551,17 @@ def test_complex_bounded_decon_and_ordered_shield_reposition_are_repaired() -> N
         ),
     )
     refusal = CommandPlan(
-        language="ja",
-        summary="複雑すぎるため実行できません",
+        language="en",
+        summary="The workflow is too complex to execute",
         steps=(CommandStep(command=CommandName.SHOW_STATUS),),
     )
     normalized = _normalize_plan(
         refusal,
         (
-            "不規則な壁面線源を除染率70%以上になるまで最大3回除染し、"
-            "鉛遮蔽体を線源から保護区域への35%位置へ配置してから65%位置へ再配置し、"
-            "保護区域へ移動して5秒測定し、開始位置へ戻して状態を表示してください"
+            "Decontaminate the irregular wall source up to three times until the removal "
+            "fraction reaches at least 70%, place the lead shield at 35% of the line from "
+            "the source to the protected area and then move it to 65%, move to the protected "
+            "area and measure for 5 seconds, return to the start, and show status"
         ),
         context,
     )
@@ -609,13 +610,13 @@ def test_all_station_instruction_expands_to_navigation_and_measurement_pairs() -
         ),
     )
     small_model = CommandPlan(
-        language="ja",
-        summary="測定します",
+        language="en",
+        summary="Measure",
         steps=(CommandStep(command=CommandName.MEASURE),),
     )
     normalized = _normalize_plan(
         small_model,
-        "すべての測定地点を順番に回って各地点で2秒測定してください",
+        "Visit every measurement station in order and measure for 2 seconds at each station",
         context,
     )
     assert len(normalized.steps) == 6
@@ -624,9 +625,7 @@ def test_all_station_instruction_expands_to_navigation_and_measurement_pairs() -
         CommandName.MEASURE,
     ] * 3
     assert all(
-        step.duration_s == 2.0
-        for step in normalized.steps
-        if step.command == CommandName.MEASURE
+        step.duration_s == 2.0 for step in normalized.steps if step.command == CommandName.MEASURE
     )
 
 
@@ -649,7 +648,7 @@ def test_builtin_command_misreported_as_candidate_is_normalized() -> None:
     assert normalized.steps == (CommandStep(command=CommandName.PAUSE),)
 
 
-def test_openai_compatible_client_accepts_bilingual_structured_plan() -> None:
+def test_openai_compatible_client_accepts_english_structured_plan() -> None:
     requests: list[dict[str, object]] = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -658,8 +657,8 @@ def test_openai_compatible_client_accepts_bilingual_structured_plan() -> None:
             requests.append(json.loads(self.rfile.read(length)))
             content = json.dumps(
                 {
-                    "language": "ja",
-                    "summary": "保護区域で測定します",
+                    "language": "en",
+                    "summary": "Measure in the protected area",
                     "steps": [
                         {
                             "command": "execute_candidate",
@@ -690,13 +689,16 @@ def test_openai_compatible_client_accepts_bilingual_structured_plan() -> None:
         import asyncio
 
         plan = asyncio.run(
-            interpreter.interpret("測定ロボットを保護区域に移動して2秒測定して", _context())
+            interpreter.interpret(
+                "Move the measurement robot to the protected area and measure for 2 seconds",
+                _context(),
+            )
         )
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
-    assert plan.language == "ja"
+    assert plan.language == "en"
     assert [step.command for step in plan.steps] == [
         CommandName.EXECUTE_CANDIDATE,
         CommandName.MEASURE,
@@ -704,7 +706,7 @@ def test_openai_compatible_client_accepts_bilingual_structured_plan() -> None:
     response_format = requests[0]["response_format"]
     assert isinstance(response_format, dict)
     assert response_format["type"] == "json_schema"
-    assert "測定ロボット" in str(requests[0]["messages"])
+    assert "measurement robot" in str(requests[0]["messages"])
 
 
 def test_client_refuses_non_loopback_endpoint() -> None:
@@ -807,8 +809,8 @@ def test_controller_auto_runs_safe_commands_and_confirms_physical_actions(
     assert host.steps[-1].command == CommandName.PAUSE
 
     interpreter.plan = CommandPlan(
-        language="ja",
-        summary="保護区域へ移動",
+        language="en",
+        summary="Move to the protected area",
         steps=(
             CommandStep(
                 command=CommandName.EXECUTE_CANDIDATE,
@@ -816,7 +818,7 @@ def test_controller_auto_runs_safe_commands_and_confirms_physical_actions(
             ),
         ),
     )
-    physical = asyncio.run(controller.submit("保護区域へ移動して"))
+    physical = asyncio.run(controller.submit("Move to the protected area"))
     assert physical.executed is False
     assert controller.pending is not None
     assert host.steps[-1].command == CommandName.PAUSE
@@ -857,8 +859,8 @@ def test_controller_stops_bounded_decontamination_when_public_condition_is_met(
         async def interpret(self, instruction: str, supplied: CommandContext) -> CommandPlan:
             del instruction, supplied
             return CommandPlan(
-                language="ja",
-                summary="残存率30%以下まで最大5回除染",
+                language="en",
+                summary="Decontaminate up to five times until no more than 30% remains",
                 steps=(
                     CommandStep(
                         command=CommandName.EXECUTE_CANDIDATE,
@@ -876,9 +878,7 @@ def test_controller_stops_bounded_decontamination_when_public_condition_is_met(
         def natural_language_context(self) -> CommandContext:
             return context
 
-        async def execute_natural_language_step(
-            self, step: CommandStep
-        ) -> dict[str, object]:
+        async def execute_natural_language_step(self, step: CommandStep) -> dict[str, object]:
             del step
             before_after = ((100.0, 80.0), (80.0, 55.0), (55.0, 25.0))
             before, after = before_after[self.calls]
@@ -902,7 +902,9 @@ def test_controller_stops_bounded_decontamination_when_public_condition_is_met(
         interpreter=Interpreter(),
         audit_path=tmp_path / "bounded.jsonl",
     )
-    pending = asyncio.run(controller.submit("残存率30%以下まで最大5回除染"))
+    pending = asyncio.run(
+        controller.submit("Decontaminate up to five times until no more than 30% remains")
+    )
     assert pending.executed is False
     completed = asyncio.run(controller.confirm())
     assert host.calls == 3
@@ -927,11 +929,7 @@ def test_product_runtime_and_command_surface_artifacts_exist() -> None:
     assert "def bind_workflow" in dashboard
     assert "execute_natural_language_step" in dashboard
     assert '"--interactive"' in run_gui
-    assert '"extra_args"' in run_gui_validation
-    assert "/app/font/useJapaneseRegion=true" in run_gui_validation
-    assert "/app/font/japaneseFontPath=" in run_gui_validation
-    assert "/app/font/customFontPath=" in run_gui_validation
-    assert "/app/font/customRegionFiles=" in run_gui_validation
+    assert '"extra_args"' not in run_gui_validation
     assert "subscribe_value_changed_fn" in dashboard
     assert "model=self._command_status" not in dashboard
     assert "update_navigation_progress" in dashboard

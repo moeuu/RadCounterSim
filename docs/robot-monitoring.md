@@ -9,9 +9,9 @@ membership.
 
 - The viewport top bar always names one active robot and shows its world
   position, current operation, phase, contact-derived coverage, and progress.
-- Each robot row has **見る** for a smooth diagonal rear follow view and **搭載**
+- Each robot row has **View** for a smooth diagonal rear follow view and **Onboard**
   for the selected robot's onboard view. Camera input or a camera-path change
-  cancels automatic tracking; pressing **見る** restores it.
+  cancels automatic tracking; pressing **View** restores it.
 - A permanent top-right building overview projects structural CAD bounds,
   contamination markers, all robot positions and headings, the planned route,
   and the current target into a common top-down coordinate frame.

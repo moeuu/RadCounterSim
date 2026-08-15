@@ -6,14 +6,14 @@ three components plus a radiation runtime configuration. The active selection
 is stored outside the repository by default at
 `~/.config/radcountersim/system-selection.json`.
 
-The normal operator path is the **SYSTEM CONFIGURATION / 構成** section in the
+The normal operator path is the **SYSTEM CONFIGURATION** section in the
 Isaac Operations window. Choose a preset, or change Environment, Robot, and
-Detector independently, then press **選択した構成を適用 / Apply**. Display names
+Detector independently, then press **Apply selected configuration**. Display names
 are shown instead of internal IDs. The GUI validates dependencies, pauses the
 timeline, rebuilds the stage, initializes radiation transport, and saves the
-successful selection for the next launch. **現在値に戻す** discards unapplied
+successful selection for the next launch. **Restore current** discards unapplied
 choices. If a catalog environment has not been downloaded or converted yet,
-the same button changes to **環境を準備して適用 / Prepare** and runs its reviewed,
+the same button changes to **Prepare environment and apply** and runs its reviewed,
 repository-local preparation steps automatically.
 
 The **NATURAL LANGUAGE COMMAND / ROBOT LLM** section appears above the system
@@ -22,7 +22,7 @@ workflow instructions only; environment, robot-set, and detector-set switching
 always uses the explicit controls below it.
 
 The robot list immediately above the LLM section is rebuilt from the selected
-robot-set catalog entry. Its **見る** and **搭載** controls, the active-robot bar,
+robot-set catalog entry. Its **View** and **Onboard** controls, the active-robot bar,
 and the building overview therefore follow the same explicit configuration;
 see `robot-monitoring.md`.
 

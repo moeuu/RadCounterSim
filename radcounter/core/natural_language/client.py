@@ -24,11 +24,11 @@ class CommandInterpreter(Protocol):
     async def interpret(self, instruction: str, context: CommandContext) -> CommandPlan: ...
 
 
-_SYSTEM_PROMPT = """You translate Japanese or English operator instructions into a
+_SYSTEM_PROMPT = """You translate English operator instructions into a
 RadCounterSim command plan. Return only JSON matching the supplied schema. Never invent
 action IDs, robot IDs, paths, commands, or coordinates. Use execute_candidate only with
 an exact available_actions.action_id. Prefer the shortest plan that completes the request.
-Use the same language as the operator for summary. If the request is ambiguous or impossible
+Write the summary in English. If the request is ambiguous or impossible
 using the listed capabilities, return a show_status step and explain the limitation in summary.
 Never claim an operation was executed; you only propose it.
 An execute_candidate whose action_type is measure only navigates to a measurement station.
@@ -85,11 +85,9 @@ def _inlined_command_schema() -> dict[str, object]:
 
 
 def _instruction_language(instruction: str) -> str:
-    if any(
-        "\u3040" <= character <= "\u30ff" or "\u4e00" <= character <= "\u9fff"
-        for character in instruction
-    ):
-        return "ja"
+    """Return the only language accepted by the English operator interface."""
+
+    del instruction
     return "en"
 
 
@@ -124,9 +122,6 @@ def _requested_measurement(instruction: str) -> bool:
     return any(
         token in lowered
         for token in (
-            "測定",
-            "計測",
-            "カウント",
             "measure",
             "measurement",
             "take a reading",
@@ -140,12 +135,10 @@ def _requested_status(instruction: str) -> bool:
     return any(
         token in lowered
         for token in (
-            "状態を表示",
-            "状態表示",
-            "状況を表示",
-            "ステータス",
             "show status",
+            "show the current status",
             "display status",
+            "display the current status",
             "report status",
         )
     )
@@ -153,7 +146,7 @@ def _requested_status(instruction: str) -> bool:
 
 def _requested_duration_s(instruction: str) -> float | None:
     match = re.search(
-        r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:秒|seconds?|secs?|s\b)",
+        r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:seconds?|secs?|s\b)",
         instruction,
         flags=re.IGNORECASE,
     )
@@ -165,18 +158,6 @@ def _requested_duration_s(instruction: str) -> float | None:
 
 def _requested_return_to_start(instruction: str) -> bool:
     lowered = instruction.casefold()
-    japanese_return = any(
-        token in lowered
-        for token in (
-            "開始位置へ戻",
-            "開始地点へ戻",
-            "初期位置へ戻",
-            "初期地点へ戻",
-            "元の位置へ戻",
-            "ホームへ戻",
-            "出発地点へ戻",
-        )
-    )
     english_return = bool(
         re.search(r"\b(?:return|go|come|send|move)\b.*\b(?:back|home)\b", lowered)
         or re.search(
@@ -184,12 +165,12 @@ def _requested_return_to_start(instruction: str) -> bool:
             lowered,
         )
     )
-    return japanese_return or english_return
+    return english_return
 
 
 def _requested_shield_placement(instruction: str) -> bool:
     lowered = instruction.casefold()
-    mentions_shield = any(token in lowered for token in ("shield", "遮蔽体", "遮蔽板"))
+    mentions_shield = "shield" in lowered
     requests_manipulation = any(
         token in lowered
         for token in (
@@ -199,11 +180,6 @@ def _requested_shield_placement(instruction: str) -> bool:
             "position",
             "manipulator",
             "gripper",
-            "把持",
-            "持ち上げ",
-            "配置",
-            "置いて",
-            "マニピュレータ",
         )
     )
     return mentions_shield and requests_manipulation
@@ -211,15 +187,13 @@ def _requested_shield_placement(instruction: str) -> bool:
 
 def _requested_decontamination(instruction: str) -> bool:
     lowered = instruction.casefold()
-    return any(token in lowered for token in ("除染", "decontaminate", "decontamination"))
+    return any(token in lowered for token in ("decontaminate", "decontamination"))
 
 
 def _requested_max_attempts(instruction: str) -> int | None:
     """Return an explicit bounded pass/attempt count, never a time value."""
 
     patterns = (
-        r"(?:最大|上限)\s*([1-5])\s*(?:回|パス)",
-        r"([1-5])\s*(?:回|パス)\s*(?:まで|繰り返|走査|除染)",
         r"\b(?:up\s+to|max(?:imum)?(?:\s+of)?)\s*([1-5])\s*(?:times?|passes?|attempts?)\b",
         r"\b([1-5])\s*(?:times?|passes?|attempts?)\b",
     )
@@ -228,7 +202,7 @@ def _requested_max_attempts(instruction: str) -> int | None:
         if match is not None:
             return int(match.group(1))
     lowered = instruction.casefold()
-    if any(token in lowered for token in ("もう一度", "再度", "again", "one more pass")):
+    if any(token in lowered for token in ("again", "one more pass")):
         return 2
     return None
 
@@ -237,7 +211,7 @@ def _percent_after_labels(instruction: str, labels: tuple[str, ...]) -> float | 
     label_pattern = "|".join(re.escape(label) for label in labels)
     patterns = (
         rf"(?:{label_pattern})[^\d%]{{0,28}}(\d{{1,3}}(?:\.\d+)?)\s*%",
-        rf"(\d{{1,3}}(?:\.\d+)?)\s*%[^。,.]{{0,28}}(?:{label_pattern})",
+        rf"(\d{{1,3}}(?:\.\d+)?)\s*%[^,.]{{0,28}}(?:{label_pattern})",
     )
     for pattern in patterns:
         match = re.search(pattern, instruction, flags=re.IGNORECASE)
@@ -253,19 +227,19 @@ def _requested_decontamination_condition(
 ) -> tuple[str, float] | None:
     removed = _percent_after_labels(
         instruction,
-        ("除染率", "除去率", "除去割合", "removal fraction", "removed fraction"),
+        ("removal fraction", "removed fraction"),
     )
     if removed is not None:
         return "decontamination_removed_fraction_at_least", removed
     remaining = _percent_after_labels(
         instruction,
-        ("残存率", "残留率", "remaining fraction", "residual fraction"),
+        ("remaining fraction", "residual fraction"),
     )
     if remaining is not None:
         return "decontamination_remaining_fraction_at_most", remaining
     coverage = _percent_after_labels(
         instruction,
-        ("被覆率", "カバレッジ", "走査率", "coverage", "surface coverage"),
+        ("coverage", "surface coverage"),
     )
     if coverage is not None:
         return "decontamination_coverage_fraction_at_least", coverage
@@ -275,7 +249,7 @@ def _requested_decontamination_condition(
 def _requested_measurement_condition(instruction: str) -> float | None:
     match = re.search(
         r"(?<![\d.])(\d+(?:\.\d+)?)\s*(?:cps|counts?\s*/\s*s)\s*"
-        r"(?:以下|未満|or\s+less|or\s+lower|at\s+most|below)?",
+        r"(?:or\s+less|or\s+lower|at\s+most|below)?",
         instruction,
         flags=re.IGNORECASE,
     )
@@ -284,13 +258,13 @@ def _requested_measurement_condition(instruction: str) -> float | None:
 
 def _requests_all_targets(instruction: str, action_type: str) -> bool:
     lowered = instruction.casefold()
-    all_tokens = ("すべて", "全て", "全部", "各", "all ", "each ", "every ")
+    all_tokens = ("all ", "each ", "every ")
     if not any(token in lowered for token in all_tokens):
         return False
     type_tokens = {
-        "decontaminate": ("除染", "面状線源", "汚染面", "decontamin", "surface"),
-        "measure": ("測定", "計測", "measurement", "station"),
-        "shield": ("遮蔽", "shield", "panel"),
+        "decontaminate": ("decontamin", "surface"),
+        "measure": ("measurement", "station"),
+        "shield": ("shield", "panel"),
     }[action_type]
     return any(token in lowered for token in type_tokens)
 
@@ -300,11 +274,6 @@ def _requests_multiple_shields(instruction: str) -> bool:
     return any(
         token in lowered
         for token in (
-            "複数の遮蔽",
-            "2枚の遮蔽",
-            "二枚の遮蔽",
-            "両方の遮蔽",
-            "すべての遮蔽",
             "all shields",
             "both shields",
             "multiple shields",
@@ -344,12 +313,6 @@ def _requested_object_manipulation(instruction: str) -> bool:
     return any(
         token in lowered
         for token in (
-            "ドラム",
-            "障害物を移動",
-            "障害物を動か",
-            "物体を移動",
-            "物体を撤去",
-            "廃棄",
             "drum",
             "move the obstacle",
             "move an object",
@@ -398,8 +361,7 @@ def _normalize_plan(
             (
                 action
                 for action in context.available_actions
-                if action.feasible
-                and action.action_type in {"place_shield", "move_shield"}
+                if action.feasible and action.action_type in {"place_shield", "move_shield"}
             ),
             key=lambda action: action.action_id,
         )
@@ -412,8 +374,7 @@ def _normalize_plan(
                 step.model_copy(update={"candidate_id": safe_shield_id})
                 if step.command == CommandName.EXECUTE_CANDIDATE
                 and step.candidate_id in by_id
-                and by_id[step.candidate_id].action_type
-                in {"place_shield", "move_shield"}
+                and by_id[step.candidate_id].action_type in {"place_shield", "move_shield"}
                 and not by_id[step.candidate_id].feasible
                 else step
                 for step in steps
@@ -506,36 +467,38 @@ def _normalize_plan(
         ]
         lowered = instruction.casefold()
         wants_protected = any(
-            token in lowered for token in ("保護区域", "protected area", "protected zone")
-        )
-        wants_remote = any(
             token in lowered
-            for token in ("別室", "除染室", "remote room", "decontamination room")
+            for token in (
+                "protected area",
+                "protected zone",
+                "protected measurement station",
+            )
         )
-        if not selected_measurement_navigation and available_measurements and (
-            wants_protected or wants_remote
+        wants_remote = any(token in lowered for token in ("remote room", "decontamination room"))
+        if (
+            not selected_measurement_navigation
+            and available_measurements
+            and (wants_protected or wants_remote)
         ):
             preferred_token = "protected" if wants_protected else "remote"
             available_measurements.sort(
-                key=lambda action: preferred_token
-                not in " ".join(
-                    (
-                        action.action_id,
-                        action.target or "",
-                        action.target_label or "",
-                    )
-                ).casefold()
+                key=lambda action: (
+                    preferred_token
+                    not in " ".join(
+                        (
+                            action.action_id,
+                            action.target or "",
+                            action.target_label or "",
+                        )
+                    ).casefold()
+                )
             )
             measurement_navigation = CommandStep(
                 command=CommandName.EXECUTE_CANDIDATE,
                 candidate_id=available_measurements[0].action_id,
             )
             measurement_index = next(
-                (
-                    index
-                    for index, step in enumerate(steps)
-                    if step.command == CommandName.MEASURE
-                ),
+                (index for index, step in enumerate(steps) if step.command == CommandName.MEASURE),
                 len(steps),
             )
             steps.insert(measurement_index, measurement_navigation)
@@ -546,9 +509,7 @@ def _normalize_plan(
         for step in steps
     )
     has_measurement = any(step.command.value == "measure" for step in steps)
-    executes_candidate = any(
-        step.command == CommandName.EXECUTE_CANDIDATE for step in steps
-    )
+    executes_candidate = any(step.command == CommandName.EXECUTE_CANDIDATE for step in steps)
     if executes_candidate and _requested_measurement(instruction) and not has_measurement:
         steps.append(
             CommandStep(
@@ -559,8 +520,7 @@ def _normalize_plan(
     verification_action_types = {
         by_id[step.candidate_id].action_type
         for step in steps
-        if step.command == CommandName.EXECUTE_CANDIDATE
-        and step.candidate_id in by_id
+        if step.command == CommandName.EXECUTE_CANDIDATE and step.candidate_id in by_id
     }
     verification_builtins_only = all(
         step.command
@@ -575,10 +535,6 @@ def _normalize_plan(
     repeated_workflow_requested = any(
         token in instruction.casefold()
         for token in (
-            "再除染",
-            "再測定",
-            "もう一度",
-            "繰り返",
             "again",
             "repeat",
             "re-measure",
@@ -614,15 +570,15 @@ def _normalize_plan(
         ]
         wants_protected = any(
             token in instruction.casefold()
-            for token in ("保護区域", "protected area", "protected zone")
+            for token in (
+                "protected area",
+                "protected zone",
+                "protected measurement station",
+            )
         )
         wants_remote_room = any(
             token in instruction.casefold()
             for token in (
-                "別室",
-                "別の部屋",
-                "別棟",
-                "除染室",
                 "remote room",
                 "decontamination room",
             )
@@ -676,11 +632,7 @@ def _normalize_plan(
             ),
         )
         return_step = next(
-            (
-                step
-                for step in steps
-                if step.command == CommandName.RETURN_MEASUREMENT_ROBOT
-            ),
+            (step for step in steps if step.command == CommandName.RETURN_MEASUREMENT_ROBOT),
             None,
         )
         status_step = next(
@@ -843,9 +795,7 @@ def _normalize_plan(
                 desired_actions.append(
                     min(
                         options,
-                        key=lambda action: abs(
-                            float(action.placement_fraction or 0.0) - fraction
-                        ),
+                        key=lambda action: abs(float(action.placement_fraction or 0.0) - fraction),
                     )
                 )
         else:
@@ -854,9 +804,7 @@ def _normalize_plan(
                 desired_actions.append(
                     min(
                         options,
-                        key=lambda action: abs(
-                            float(action.placement_fraction or 0.0) - fraction
-                        ),
+                        key=lambda action: abs(float(action.placement_fraction or 0.0) - fraction),
                     )
                 )
 
@@ -868,19 +816,17 @@ def _normalize_plan(
             for action in desired_actions
         ]
         shield_indices = [
-            index
-            for index, step in enumerate(steps)
-            if step in existing_shield_steps
+            index for index, step in enumerate(steps) if step in existing_shield_steps
         ]
         insertion = shield_indices[0] if shield_indices else 0
         steps = [step for step in steps if step not in existing_shield_steps]
         lowered = instruction.casefold()
         decon_position = min(
-            (lowered.find(token) for token in ("除染", "decontamin") if token in lowered),
+            (lowered.find(token) for token in ("decontamin",) if token in lowered),
             default=-1,
         )
         shield_position = min(
-            (lowered.find(token) for token in ("遮蔽", "shield") if token in lowered),
+            (lowered.find(token) for token in ("shield",) if token in lowered),
             default=-1,
         )
         if decon_position >= 0 and shield_position > decon_position:
@@ -978,11 +924,7 @@ def _normalize_plan(
         # candidate context.  Refuse silent truncation by returning a status-only
         # plan that explains the bounded-workflow limit.
         steps = [CommandStep(command=CommandName.SHOW_STATUS)]
-        summary = (
-            "要求された工程は24ステップの安全上限を超えています。対象を分割してください。"
-            if language == "ja"
-            else "The requested workflow exceeds the 24-step safety limit; split the targets."
-        )
+        summary = "The requested workflow exceeds the 24-step safety limit; split the targets."
     else:
         summary = plan.summary
     if (
@@ -993,12 +935,8 @@ def _normalize_plan(
     ):
         duration = 2.0 if requested_duration_s is None else requested_duration_s
         summary = (
-            f"鉛遮蔽体を線源と保護区域の間へ配置し、{duration:g}秒測定します。"
-            if language == "ja"
-            else (
-                "Place the lead shield between the radiation source and protected area, "
-                f"then measure for {duration:g} seconds."
-            )
+            "Place the lead shield between the radiation source and protected area, "
+            f"then measure for {duration:g} seconds."
         )
     return CommandPlan.model_validate(
         {

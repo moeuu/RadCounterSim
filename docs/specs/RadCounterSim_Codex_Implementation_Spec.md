@@ -1,88 +1,106 @@
-# RadCounterSim 実装仕様書
+# RadCounterSim Implementation Specification
 
-## 0. この仕様書の目的
+## 0. Purpose
 
-本仕様書は、NVIDIA Isaac Sim 上に、ロボット行動と放射線場変化を連成させた閉ループ型放射線源対策シミュレーター **RadCounterSim** を実装するための Codex 向け設計仕様である。
+This document is the Codex-facing design specification for implementing
+**RadCounterSim**, a closed-loop radiation-source countermeasure simulator that couples
+robot actions with changes in the radiation field on NVIDIA Isaac Sim.
 
-実装対象は次の全機能を含む。
+The implementation scope includes all of the following capabilities:
 
-- 移動ロボットによる環境内移動
-- ロボットアームによる遮蔽材、障害物、汚染物体の把持・移動・設置・撤去
-- 面線源、点線源、汚染物体に付随する線源の表現
-- 除染による線源強度の局所的減少
-- 遮蔽による線源―検出器間の伝達率の変化
-- 汚染物体の移動・撤去による線源位置・有無の変化
-- 非指向性検出器、回転遮蔽体付き検出器、エネルギービン付きカウント計測
-- 線量率マップと検出器カウントの高速再計算
-- 放射線源位置・強度・不確かさの推定
-- 対策前予測、対策実行、対策後再計測、予測―実測残差、再推定、再計画の閉ループ
-- 除染残り、遮蔽材ずれ、未発見線源、推定スケール誤差の故障モード生成・識別
-- 計測時間、作業時間、対策回数、遮蔽材量、ロボット稼働時間を考慮する行動評価
-- GUI、ヘッドレス実験実行、ログ、再現性、単体試験、統合試験、性能ベンチマーク
-- ROS 2 / MoveIt 2 / Nav2 連携を追加できる拡張インターフェース
+- Mobile-robot navigation through the environment
+- Robot-arm grasping, movement, placement, and removal of shields, obstacles, and
+  contaminated objects
+- Representation of surface sources, point sources, and sources attached to contaminated objects
+- Local reduction of source intensity through decontamination
+- Changes in source-to-detector transmission through shielding
+- Changes in source position or presence when contaminated objects move or are removed
+- Omnidirectional detectors, detectors with rotating shields, and energy-binned counting
+- Fast recalculation of dose-rate maps and detector counts
+- Estimation of radiation-source position, intensity, and uncertainty
+- A closed loop covering pre-action prediction, execution, post-action measurement,
+  predicted-versus-observed residuals, re-estimation, and replanning
+- Generation and identification of residual contamination, shield displacement, hidden
+  sources, and estimation-scale errors
+- Action evaluation that includes measurement time, work time, intervention count,
+  shielding material, and robot operating time
+- A GUI, headless experiments, logging, reproducibility, unit and integration tests, and
+  performance benchmarks
+- Extension interfaces for ROS 2, MoveIt 2, and Nav2 integration
 
-## 1. 最重要設計判断
+## 1. Critical design decisions
 
-### 1.1 OceanSim を直接フォークしない
+### 1.1 Do not fork OceanSim directly
 
-OceanSim は設計参考とし、RadCounterSim は独立した Isaac Sim extension として実装する。理由は次の通り。
+Use OceanSim as a design reference, but implement RadCounterSim as an independent Isaac
+Sim extension for the following reasons:
 
-- 水中カメラ・ソナー用コードと放射線輸送・対策コードを混在させない。
-- Isaac Sim の将来版への追従を容易にする。
-- 放射線カーネルを Isaac Sim 非依存で単体試験できるようにする。
-- 論文上の貢献を独立したシミュレーション基盤として示せる。
+- Keep underwater camera and sonar code separate from radiation transport and
+  countermeasure code.
+- Make future Isaac Sim upgrades easier.
+- Allow the radiation kernel to be unit-tested without Isaac Sim.
+- Present the research contribution as an independent simulation platform.
 
-### 1.2 Truth と Belief を完全分離する
+### 1.2 Separate truth and belief completely
 
-シミュレーション内部には次の二つの状態を持たせる。
+Maintain two distinct internal states:
 
-- **TruthState**: 実際の線源分布、実際の除染効率、実際の遮蔽位置、未発見線源、検出器誤差など。
-- **BeliefState**: 推定された線源分布、推定不確かさ、計画時に仮定した対策効果。
+- **TruthState**: Actual source distribution, decontamination efficiency, shield pose,
+  hidden sources, detector errors, and other ground-truth quantities.
+- **BeliefState**: Estimated source distribution, estimated uncertainty, and assumed
+  countermeasure effects used during planning.
 
-Estimator と Planner は TruthState を参照してはならない。利用可能なのは公開環境形状、ロボット状態、計測結果、対策完了通知のみとする。
+Estimators and planners must never read `TruthState`. They may use only public
+environment geometry, robot state, measurements, and countermeasure-completion notices.
 
-### 1.3 放射線計算を物理ステップから分離する
+### 1.3 Decouple radiation computation from physics steps
 
-放射線場全体を毎 physics tick 再計算しない。計算を行うイベントは以下に限定する。
+Do not recompute the entire radiation field on every physics tick. Compute it only for:
 
-- 計測要求
-- 線量マップ更新要求
-- 対策候補評価
-- 遮蔽・汚染物体・環境形状の pose 変更完了
-- 除染による activity 更新
-- 閉ループの各ステップ
+- Measurement requests
+- Dose-map update requests
+- Candidate countermeasure evaluation
+- Completed pose changes for shields, contaminated objects, or environment geometry
+- Activity updates caused by decontamination
+- Each step of the closed loop
 
-### 1.4 二つの実行モードを持つ
+### 1.4 Provide two execution modes
 
-- **Deterministic action mode**: ナビゲーション・把持の成功を高レベルで判定し、最終 pose と作用だけを適用する。閉ループアルゴリズム評価と CI に使用。
-- **Physics action mode**: PhysX、コントローラ、グリッパ、MoveIt 2 等を使って実際にロボットを動かす。実機接続前の評価に使用。
+- **Deterministic action mode**: Determine navigation and grasp success at a high level
+  and apply only the final pose and effect. Use this mode for closed-loop algorithm
+  evaluation and CI.
+- **Physics action mode**: Move robots with PhysX, controllers, grippers, MoveIt 2, and
+  related components. Use this mode for evaluation before hardware integration.
 
-両モードで同じ `CountermeasureAction` と `ActionResult` を使用する。
+Both modes must use the same `CountermeasureAction` and `ActionResult` types.
 
-## 2. 対象バージョンと開発環境
+## 2. Target versions and development environment
 
-### 2.1 推奨固定環境
+### 2.1 Recommended pinned environment
 
 - Ubuntu 24.04
 - NVIDIA Isaac Sim 6.0.1
 - ROS 2 Jazzy
-- Python は Isaac Sim 同梱環境
-- C++17 以上
-- Intel Embree 4 系
-- NumPy、SciPy、Pydantic、PyYAML、pandas、pyarrow
+- Python from the Isaac Sim bundled environment
+- C++17 or newer
+- Intel Embree 4.x
+- NumPy, SciPy, Pydantic, PyYAML, pandas, and pyarrow
 - pytest
 
-`requirements-lock.txt` と `environment_manifest.json` にバージョンを固定すること。Isaac Sim 5.0 を使う必要がある場合は別ブランチを切り、同一コード内で大量の version conditional を書かない。
+Pin versions in `requirements-lock.txt` and `environment_manifest.json`. If Isaac Sim
+5.0 support is necessary, create a separate branch instead of adding large numbers of
+version conditionals to the same codebase.
 
-### 2.2 開発方式
+### 2.2 Development approach
 
-Isaac Sim source workspace で extension template を生成し、以下の三層に分割する。
+Generate extension templates in an Isaac Sim source workspace and divide the system into
+three layers:
 
-1. `radcounter.core`: Isaac Sim 非依存の Python モデル、推定、計画、ログ。
-2. `radcounter.radiation.native`: Embree を使う C++/pybind11 backend。
-3. `radcounter.isaac`: USD、UI、ロボット、物理、ROS 2 との接続。
+1. `radcounter.core`: Isaac Sim-independent Python models, estimation, planning, and logging.
+2. `radcounter.radiation.native`: C++/pybind11 backend using Embree.
+3. `radcounter.isaac`: Integration with USD, UI, robots, physics, and ROS 2.
 
-## 3. リポジトリ構成
+## 3. Repository structure
 
 ```text
 RadCounterSim/
@@ -180,51 +198,52 @@ RadCounterSim/
     └── data/
 ```
 
-## 4. extension の役割
+## 4. Extension responsibilities
 
 ### 4.1 `radcounter.radiation.native`
 
-責務:
+Responsibilities:
 
-- Embree device、scene、geometry、instance の生成・破棄
-- USD から抽出済みの三角形 mesh を受け取る
-- source point と detector point の segment ray tracing
-- 材料別通過長または energy 別 transmission のバッチ計算
-- 動的 object transform の更新
-- GIL を解放した並列計算
-- Embree が使えないときに明示的なエラーを返す
+- Create and destroy Embree devices, scenes, geometry, and instances
+- Receive triangle meshes extracted from USD
+- Trace finite segments between source and detector points
+- Batch-compute per-material path lengths or per-energy transmission
+- Update dynamic-object transforms
+- Perform parallel computation with the GIL released
+- Return an explicit error when Embree is unavailable
 
-この extension は UI や USD API を直接呼ばない。
+This extension must not call UI or USD APIs directly.
 
 ### 4.2 `radcounter.isaac`
 
-責務:
+Responsibilities:
 
-- UI extension と Examples Browser 登録
+- UI extension and Examples Browser registration
 - scenario load/reset/clear
-- USD mesh、transform、custom attribute の読み取り
-- robot、sensor、shield、tool、contaminated object の生成
-- Physics callback と event subscription
+- Read USD meshes, transforms, and custom attributes
+- Create robots, sensors, shields, tools, and contaminated objects
+- Physics callbacks and event subscriptions
 - visualization
 - optional ROS 2 bridge
 
 ### 4.3 `radcounter.core`
 
-責務:
+Responsibilities:
 
-- TruthState、BeliefState、Action、Measurement の型
-- 放射線源、材料、検出器モデル
-- 放射線演算の高レベル API
-- activity map と cache 管理
-- 線源推定
+- Types for `TruthState`, `BeliefState`, actions, and measurements
+- Radiation-source, material, and detector models
+- High-level radiation-computation API
+- Activity-map and cache management
+- Source estimation
 - residual diagnosis
 - planner
 - closed-loop state machine
-- experiment runner と logger
+- Experiment runner and logger
 
-## 5. 基本型と状態モデル
+## 5. Core types and state model
 
-すべての public data model は Pydantic v2 または frozen dataclass で定義する。単位を field 名に含める。
+Define every public data model with Pydantic v2 or a frozen dataclass. Include units in
+field names.
 
 ```python
 from dataclasses import dataclass, field
@@ -298,7 +317,7 @@ class RadiationMeasurement:
     scene_revision: int
 ```
 
-### 5.1 Revision 管理
+### 5.1 Revision management
 
 ```python
 @dataclass
@@ -310,21 +329,25 @@ class RevisionState:
     detector_revision: int = 0
 ```
 
-更新規則:
+Update rules:
 
-- 遮蔽材、障害物、汚染物体の pose 変更: `geometry_revision += 1`
-- 材質・厚さ変更: `material_revision += 1`
-- 線源付き物体移動: `source_pose_revision += 1` と必要に応じて `geometry_revision += 1`
-- 除染: `source_activity_revision += 1` のみ
-- detector calibration 変更: `detector_revision += 1`
+- Shield, obstacle, or contaminated-object pose change: `geometry_revision += 1`
+- Material or thickness change: `material_revision += 1`
+- Movement of an object carrying a source: `source_pose_revision += 1`, plus
+  `geometry_revision += 1` when needed
+- Decontamination: only `source_activity_revision += 1`
+- Detector-calibration change: `detector_revision += 1`
 
-除染時は transfer matrix を再 ray trace せず、既存行列と新 activity vector の積だけで再計算できる設計にする。
+Decontamination must not retrace the transfer matrix. Recompute using only the existing
+matrix multiplied by the new activity vector.
 
-## 6. USD metadata 実装
+## 6. USD metadata implementation
 
-最初の版では独自 USD schema plugin を作らず、namespaced custom attribute を使用する。巨大な per-face activity array は `.npz` sidecar に保存し、USD には URI と checksum を格納する。
+The first version must use namespaced custom attributes instead of a custom USD schema
+plugin. Store large per-face activity arrays in `.npz` sidecars and keep their URI and
+checksum in USD.
 
-### 6.1 共通属性
+### 6.1 Common attributes
 
 ```text
 rad:role                        token
@@ -332,7 +355,7 @@ rad:enabled                     bool
 rad:objectId                    string
 ```
 
-`rad:role` の候補:
+Allowed `rad:role` values:
 
 ```text
 source
@@ -347,7 +370,7 @@ robot
 obstacle
 ```
 
-### 6.2 線源属性
+### 6.2 Source attributes
 
 ```text
 rad:source:type                 token    point|surface|volume
@@ -360,7 +383,7 @@ rad:source:hiddenFromEstimator  bool
 rad:source:movableWithPrim      bool
 ```
 
-### 6.3 遮蔽物属性
+### 6.3 Attenuator attributes
 
 ```text
 rad:material:id                 string
@@ -371,7 +394,7 @@ rad:shield:movable              bool
 rad:shield:resourceUnits        double
 ```
 
-### 6.4 除染対象属性
+### 6.4 Decontamination-target attributes
 
 ```text
 rad:decon:enabled               bool
@@ -382,7 +405,7 @@ rad:decon:minToolDwellS         double
 rad:decon:surfaceId             string
 ```
 
-### 6.5 操作対象属性
+### 6.5 Manipulation-target attributes
 
 ```text
 rad:manipulation:movable        bool
@@ -394,7 +417,7 @@ rad:manipulation:disposalClass  string
 
 ### 6.6 `UsdRadiationRegistry`
 
-実装ファイル:
+Implementation file:
 
 ```text
 radcounter/isaac/usd/radiation_registry.py
@@ -414,17 +437,18 @@ class UsdRadiationRegistry:
     def get_decon_surfaces(self) -> list[DeconSurfaceDescriptor]: ...
 ```
 
-USD change notice を購読し、transform と radiation attribute の変更を分類して revision を更新する。変更ごとに全 stage を再走査しない。
+Subscribe to USD change notices, classify transform and radiation-attribute changes, and
+update revisions. Do not rescan the entire stage for every change.
 
-## 7. USD mesh 抽出
+## 7. USD mesh extraction
 
-実装ファイル:
+Implementation file:
 
 ```text
 radcounter/isaac/usd/mesh_extractor.py
 ```
 
-### 7.1 出力型
+### 7.1 Output type
 
 ```python
 @dataclass(frozen=True)
@@ -441,17 +465,19 @@ class MeshGeometry:
     dynamic: bool
 ```
 
-### 7.2 実装要件
+### 7.2 Implementation requirements
 
-- `UsdGeom.Mesh` の points、faceVertexCounts、faceVertexIndices を三角形化する。
-- quad と n-gon は fan triangulation ではなく、USD triangulation utility または安定な ear clipping を使う。
-- metersPerUnit を読み、すべて meter に変換する。
-- world transform は double で保持し、Embree 入力時に float32 へ変換する。
-- negative scale、non-uniform scale、instance、prototype を扱う。
-- material binding と `rad:material:id` を triangle ごとに解決する。
-- collision mesh と visual mesh が異なる場合、放射線計算用 mesh を明示属性で指定できるようにする。
-- `rad:transportMesh=true` を優先し、なければ render mesh を使用する。
-- source surface の triangle index と transport mesh の triangle index が一致するよう、抽出後の index map を保存する。
+- Triangulate `UsdGeom.Mesh` points, `faceVertexCounts`, and `faceVertexIndices`.
+- For quads and n-gons, use a USD triangulation utility or stable ear clipping rather
+  than fan triangulation.
+- Read `metersPerUnit` and convert all values to meters.
+- Keep world transforms as double precision and convert to `float32` for Embree input.
+- Handle negative scale, non-uniform scale, instances, and prototypes.
+- Resolve material bindings and `rad:material:id` for each triangle.
+- When collision and visual meshes differ, allow an explicit transport mesh for radiation.
+- Prefer `rad:transportMesh=true`; otherwise use the render mesh.
+- Preserve an extraction index map so source-surface triangle indices match transport-mesh
+  triangle indices.
 
 ## 8. Embree backend
 
@@ -524,17 +550,18 @@ public:
 };
 ```
 
-### 8.3 scene 構成
+### 8.3 Scene organization
 
-- 静的 environment mesh は一つまたは material ごとの少数 geometry にまとめる。
-- 可動 shield、汚染物体、障害物は instance として登録し、transform update 後に commit する。
-- ray query は C++ 内で並列化する。
-- pybind11 binding は計算中 GIL を解放する。
-- scene commit と trace を同時実行しない。read-write lock を使用する。
+- Combine static environment meshes into one geometry or a small set grouped by material.
+- Register movable shields, contaminated objects, and obstacles as instances, then commit
+  after transform updates.
+- Parallelize ray queries in C++.
+- Release the GIL during computation in pybind11 bindings.
+- Use a read-write lock so scene commits and traces never run concurrently.
 
 ### 8.4 segment ray tracing
 
-各 ray は source sample から detector までの有限 segment とする。
+Each ray is a finite segment from a source sample to a detector.
 
 ```text
 origin = source + eps * dir
@@ -542,26 +569,30 @@ tnear = eps
 tfar  = distance - eps
 ```
 
-最近接 hit を反復取得し、`tnear = hit_t + eps` として全交差を収集する。最大 hit 数を設定し、超過時は error flag を返す。
+Repeatedly retrieve the closest hit and set `tnear = hit_t + eps` to collect every
+intersection. Enforce a maximum hit count and return an error flag when exceeded.
 
-### 8.5 solid geometry の通過長
+### 8.5 Path length through solid geometry
 
-- hit を距離順に保持する。
-- geom ID ごとに entry/exit を判定する。
-- normal orientation が信頼できる場合は `dot(ray_dir, geometric_normal)` で entry/exit を判断する。
-- orientation が不安定な mesh は geom ごとの hit を pair にして長さを合計する。
-- odd number の hit は invalid geometry として警告し、設定に応じて conservative または zero attenuation とする。
-- nested material は active geometry の material をすべて加算する。
+- Keep hits ordered by distance.
+- Determine entry and exit for each geometry ID.
+- When normal orientation is reliable, use `dot(ray_dir, geometric_normal)` to classify
+  entry and exit.
+- For meshes with unreliable orientation, pair hits per geometry and sum their lengths.
+- Warn that an odd number of hits is invalid geometry, then apply conservative or zero
+  attenuation according to configuration.
+- For nested materials, add the materials of every active geometry.
 
 ### 8.6 thin sheet
 
-一枚板、フィルム、簡略化した遮蔽板は `thin_sheet` とし、交差一回につき
+Represent plates, films, and simplified shield panels as `thin_sheet`; add the following
+for each intersection:
 
 ```text
 effective_thickness = thickness / max(abs(dot(ray_dir, normal)), cos_limit)
 ```
 
-を加算する。grazing angle で無限大にならないよう上限を設定する。
+Apply a cap to prevent an infinite value at grazing angles.
 
 ### 8.7 transmission
 
@@ -569,44 +600,44 @@ effective_thickness = thickness / max(abs(dot(ray_dir, normal)), cos_limit)
 T(E) = exp(-sum_m mu_m(E) * length_m)
 ```
 
-数値 underflow を避けるため exponent を下限 clamp する。`trace_path_lengths` は debug・検証用、`trace_transmission` は高速通常経路とする。
+Clamp the exponent at a lower bound to avoid numerical underflow. Use
+`trace_path_lengths` for debugging and validation and `trace_transmission` as the normal
+fast path.
 
 ### 8.8 fallback backend
 
-`AnalyticTransportBackend` を必ず実装する。
+Always implement `AnalyticTransportBackend` with:
 
-- 遮蔽物なし
-- 単一平板の解析式
-- CI で Embree 未インストール時にも core test を実行可能
+- No attenuator
+- An analytic single-slab solution
+- Core tests that can run in CI when Embree is not installed
 
-## 9. 放射線源モデル
+## 9. Radiation-source model
 
 ### 9.1 point source
 
-各 isotope emission line に対して
+For each isotope emission line, compute:
 
 ```text
 photon_rate_s = activity_bq * photons_per_decay
 fluence_rate = photon_rate_s / (4*pi*r^2)
 ```
 
-を計算する。
-
 ### 9.2 surface source
 
-triangle ごとに activity を持たせる。
+Store activity per triangle.
 
 ```text
 activity_triangle_bq = surface_activity_bq_m2 * triangle_area_m2
 ```
 
-quadrature mode:
+Quadrature modes:
 
-- `centroid`: triangle centroid 一点
-- `stratified_n`: triangle 内に n 点
-- `adaptive`: detector との距離と triangle サイズで n を調整
+- `centroid`: one point at the triangle centroid
+- `stratified_n`: `n` points within the triangle
+- `adaptive`: adjust `n` using detector distance and triangle size
 
-各 sample は local coordinate と weight を持つ。
+Each sample has local coordinates and a weight.
 
 ```python
 @dataclass(frozen=True)
@@ -615,14 +646,16 @@ class SourceSampleBatch:
     activity_bq: np.ndarray        # [S]
     isotope_index: np.ndarray      # [S]
     source_id_index: np.ndarray    # [S]
-    triangle_index: np.ndarray     # [S], point source は -1
+    triangle_index: np.ndarray     # [S], -1 for a point source
 ```
 
-可動 object に付随する sample は local position を cache し、object transform 変更時に world position だけ更新する。
+For samples attached to movable objects, cache local positions and update only world
+positions when the object transform changes.
 
 ### 9.3 volume source
 
-初回論文に必須ではないが interface は用意する。voxel center と voxel activity の sample batch に変換する。
+This is not required for the first paper, but provide the interface. Convert voxel centers
+and voxel activity into a sample batch.
 
 ### 9.4 activity repository
 
@@ -635,9 +668,9 @@ class SourceRepository:
     def deactivate_source(self, source_id): ...
 ```
 
-Truth と Belief の repository instance は別にする。
+Use separate repository instances for truth and belief.
 
-## 10. 放射線 forward model
+## 10. Radiation forward model
 
 ```python
 class RadiationForwardModel:
@@ -653,18 +686,18 @@ class RadiationForwardModel:
     def build_transfer_matrix(...): ...
 ```
 
-energy line `e`、source sample `s`、detector pose `d` の寄与:
+Contribution from energy line `e`, source sample `s`, and detector pose `d`:
 
 ```text
 lambda_sde = A_s * Y_e * G(r_sd) * T_sd(E_e) * epsilon_d(E_e, theta_sd)
 ```
 
 - `G(r)=1/(4*pi*max(r,r_min)^2)`
-- `T` は Embree attenuation
-- `epsilon` は detector response interpolation
-- energy bin に集約
-- background を加える
-- dead time model を適用
+- `T` is Embree attenuation.
+- `epsilon` is detector-response interpolation.
+- Aggregate into energy bins.
+- Add background.
+- Apply the dead-time model.
 
 ### 10.1 direct/scatter plugin
 
@@ -673,17 +706,19 @@ class ScatterModel(Protocol):
     def add_scatter(self, direct_prediction, context) -> np.ndarray: ...
 ```
 
-実装:
+Implementations:
 
 - `NoScatterModel`
 - `EmpiricalBuildupModel`
-- `TruthOnlyBiasModel`: ground truth 側だけに spatial bias、energy redistribution、background drift を与え、推定モデルとの mismatch を生成
+- `TruthOnlyBiasModel`: Apply spatial bias, energy redistribution, and background drift
+  only on the ground-truth side to create mismatch with the estimation model.
 
-散乱を未実装のまま暗黙に無視せず、設定ファイルとログに必ず model 名を保存する。
+Never silently ignore unimplemented scatter. Always store the model name in configuration
+and logs.
 
-## 11. detector 実装
+## 11. Detector implementation
 
-### 11.1 センサ階層
+### 11.1 Sensor hierarchy
 
 ```python
 class RadiationSensor:
@@ -697,14 +732,15 @@ class RotatingShieldCounter(RadiationSensor): ...
 class DoseRateMeter(RadiationSensor): ...
 ```
 
-### 11.2 計測状態機械
+### 11.2 Measurement state machine
 
 ```text
 IDLE -> INTEGRATING -> FINALIZING -> READY
                   \-> CANCELLED
 ```
 
-積算中に detector が動く場合は `trajectory_subsamples` 回だけ pose を採取して平均 rate を求める。初期設定は stationary measurement とする。
+If the detector moves during integration, sample its pose `trajectory_subsamples` times
+and compute the average rate. The default configuration uses stationary measurement.
 
 ### 11.3 Poisson sampling
 
@@ -713,27 +749,29 @@ expected_counts_bin = rate_cps_bin * duration_s
 observed_counts_bin ~ Poisson(expected_counts_bin)
 ```
 
-乱数 generator は run seed から detector ごとの child seed を作る。再現性試験で完全一致すること。
+Derive a child seed for each detector from the run seed. Reproducibility tests must match
+exactly.
 
-### 11.4 回転遮蔽体
+### 11.4 Rotating shield
 
-二方式を実装する。
+Implement two modes:
 
-1. `physical_geometry`: 実際の遮蔽体 mesh を detector 周囲で回転し、Embree で減衰を計算。
-2. `response_mask`: 事前計算した角度 response を掛ける高速モード。
+1. `physical_geometry`: Rotate an actual shield mesh around the detector and compute
+   attenuation with Embree.
+2. `response_mask`: Fast mode that applies a precomputed angular response.
 
-回転角、回転速度、各角度の積算時間、encoder noise を記録する。
+Record angle, rotation speed, integration time at each angle, and encoder noise.
 
-## 12. transfer matrix と cache
+## 12. Transfer matrix and cache
 
-### 12.1 行列定義
+### 12.1 Matrix definition
 
 ```text
 y = H x + b
 ```
 
-- `x`: candidate source basis の activity
-- `H`: detector pose × energy bin × candidate basis の unit-activity count response
+- `x`: Activity of the candidate source basis
+- `H`: Unit-activity count response over detector pose, energy bin, and candidate basis
 - `b`: background
 
 ### 12.2 cache key
@@ -749,19 +787,21 @@ class TransferMatrixKey:
     energy_grid_hash: str
 ```
 
-`source_activity_revision` は key に含めない。除染は `x` のみを変える。
+Do not include `source_activity_revision` in the key. Decontamination changes only `x`.
 
 ### 12.3 partial invalidation
 
-- shield pose 変更: geometry revision により全体無効化する MVP を実装。
-- その後、shield bounding box と交差可能な ray の行のみ再計算する optional optimization。
-- movable source pose 変更: source basis columns のみ更新。
+- Shield-pose change: for the MVP, invalidate everything through the geometry revision.
+- Optional later optimization: recompute only ray rows that can intersect the shield's
+  bounding box.
+- Movable-source pose change: update only source-basis columns.
 
-### 12.4 chunk 計算
+### 12.4 Chunked computation
 
-大規模 map は detector evaluation points と source samples を chunk し、最大一時メモリを設定値以下にする。
+For large maps, chunk detector evaluation points and source samples so peak temporary
+memory remains below the configured limit.
 
-## 13. 線量マップ
+## 13. Dose maps
 
 ```python
 class DoseMapEvaluator:
@@ -771,7 +811,7 @@ class DoseMapEvaluator:
     def evaluate(grid, state, chunk_size) -> DoseMap: ...
 ```
 
-出力:
+Output:
 
 ```python
 @dataclass(frozen=True)
@@ -782,9 +822,9 @@ class DoseMap:
     revision: RevisionState
 ```
 
-## 14. visualization
+## 14. Visualization
 
-実装ファイル:
+Implementation files:
 
 ```text
 radcounter/isaac/visualization/
@@ -795,15 +835,17 @@ radcounter/isaac/visualization/
 └── action_visualizer.py
 ```
 
-要件:
+Requirements:
 
-- 2D heatmap は `UsdGeom.Points` または instancer を使い、cell ごとの cube を大量生成しない。
-- color range は fixed、percentile、log の三方式。
-- Truth source overlay は debug 権限かつ明示 toggle 時のみ表示。
-- Belief source、uncertainty、predicted post-action、observed post-action、normalized residual を別 layer にする。
-- selected ray の material path と通過長を表示できる。
+- Use `UsdGeom.Points` or an instancer for 2D heatmaps; do not create large numbers of
+  per-cell cubes.
+- Support fixed, percentile, and logarithmic color ranges.
+- Show the truth-source overlay only with debug authorization and an explicit toggle.
+- Put belief sources, uncertainty, predicted post-action values, observed post-action
+  values, and normalized residuals on separate layers.
+- Display material paths and path lengths for selected rays.
 
-## 15. robot abstraction
+## 15. Robot abstraction
 
 ```python
 class RobotController(Protocol):
@@ -819,28 +861,30 @@ class IsaacPhysicsRobotController(RobotController): ...
 class Ros2RobotController(RobotController): ...
 ```
 
-### 15.1 measurement robot
+### 15.1 Measurement robot
 
-- differential drive または omnidirectional mobile base
-- detector mast
-- detector pose は robot base transform と sensor extrinsic から取得
-- Nav2 接続は optional
+- Differential-drive or omnidirectional mobile base
+- Detector mast
+- Derive detector pose from the robot-base transform and sensor extrinsics
+- Optional Nav2 integration
 
-### 15.2 countermeasure robot
+### 15.2 Countermeasure robot
 
-- mobile base + manipulator + gripper を推奨
-- 初期段階では fixed manipulator でもよいが、controller interface は mobile manipulator を前提にする
-- shield、obstacle、contaminated object を操作できる
-- decon tool を tool changer または固定 attachment として持つ
+- A mobile base, manipulator, and gripper are recommended.
+- A fixed manipulator is acceptable initially, but design the controller interface for a
+  mobile manipulator.
+- It can manipulate shields, obstacles, and contaminated objects.
+- It carries the decontamination tool through a tool changer or fixed attachment.
 
-### 15.3 grasp 実装
+### 15.3 Grasp implementation
 
-二方式:
+Two modes:
 
-- deterministic: target の grasp frame 到達可能性と collision-free 条件を確認後、target prim を gripper prim に parent/constraint する。
-- physics: surface gripper または fixed joint constraint を使用し、接触と相対 pose を確認する。
+- Deterministic: after verifying reachability of the target grasp frame and a collision-free
+  path, parent or constrain the target prim to the gripper prim.
+- Physics: use a surface gripper or fixed-joint constraint and verify contact and relative pose.
 
-把持終了後に対象 pose を radiation registry に反映する。
+After grasping, reflect the target pose in the radiation registry.
 
 ## 16. action model
 
@@ -878,13 +922,13 @@ class ActionResult:
     after_revision: RevisionState
 ```
 
-`truth_details` は experiment logger のみアクセス可能で、Estimator/Planner には渡さない。
+Only the experiment logger may access `truth_details`; never pass it to estimators or planners.
 
-## 17. 除染実装
+## 17. Decontamination implementation
 
 ### 17.1 activity map
 
-surface source は triangle ごとの activity を `.npz` で持つ。
+Store surface-source activity per triangle in `.npz`.
 
 ```text
 triangle_indices
@@ -908,16 +952,16 @@ class DeconToolSpec:
     rate_constant_s_inv: float
 ```
 
-physics tick ごとに footprint sample ray を tool axis 方向に cast する。
+On each physics tick, cast footprint sample rays along the tool axis.
 
-有効接触条件:
+Valid-contact conditions:
 
-- target surface までの距離が閾値以下
-- tool axis と surface normal の角度が閾値以下
-- end-effector の surface tangential speed が上限以下
-- target prim が `rad:decon:enabled=true`
+- Distance to the target surface is at or below the threshold.
+- Angle between the tool axis and surface normal is at or below the threshold.
+- End-effector tangential speed over the surface is at or below the limit.
+- The target prim has `rad:decon:enabled=true`.
 
-triangle ごとに exposure を積算する。
+Accumulate exposure per triangle.
 
 ```text
 E_i += contact_weight * dt
@@ -926,23 +970,24 @@ nominal_removal_fraction_i = 1 - exp(-k * E_i)
 
 ### 17.3 ground truth failure
 
-Truth 側では
+On the truth side, use:
 
 ```text
 actual_fraction_i = clamp(nominal_fraction_i * local_efficiency_i, 0, 1)
 local_efficiency_i ~ spatially correlated random field
 ```
 
-とし、未処理 spot、工具位置ずれ、効率ばらつきを生成できる。
+This allows generation of untreated spots, tool-position offsets, and efficiency variation.
 
 ### 17.4 removed activity
 
-設定により二方式:
+Support two configured modes:
 
-- `discard`: 除去 activity を scene から消す。
-- `transfer_to_waste`: 除去 activity を waste container source に移す。
+- `discard`: Remove treated activity from the scene.
+- `transfer_to_waste`: Move treated activity to a waste-container source.
 
-研究用には後者を推奨する。除染しただけで放射能が消滅したことにしない。
+The second mode is recommended for research; do not imply that radioactivity disappears
+merely because a surface was decontaminated.
 
 ### 17.5 API
 
@@ -952,11 +997,11 @@ class DecontaminationExecutor:
     def preview_nominal_effect(self, action, belief_state) -> SourceStateDelta: ...
 ```
 
-## 18. 遮蔽実装
+## 18. Shielding implementation
 
 ### 18.1 shield asset
 
-各 shield asset は以下を持つ。
+Each shield asset contains:
 
 - visual mesh
 - collider
@@ -965,7 +1010,7 @@ class DecontaminationExecutor:
 - support/contact frame
 - radiation transport mesh
 - material ID
-- solid または thin sheet mode
+- Solid or thin-sheet mode
 - nominal thickness
 - resource units
 
@@ -976,38 +1021,42 @@ PLAN -> NAVIGATE_TO_SHIELD -> GRASP -> NAVIGATE_TO_TARGET
 -> PLACE -> RELEASE -> WAIT_SETTLE -> COMMIT_RADIATION_SCENE -> COMPLETE
 ```
 
-`WAIT_SETTLE` では線速度・角速度が閾値以下になるまで待つ。timeout 時は FAILED または PARTIAL。
+In `WAIT_SETTLE`, wait until linear and angular velocity fall below their thresholds. On
+timeout, return `FAILED` or `PARTIAL`.
 
-### 18.3 遮蔽ずれ
+### 18.3 Shield displacement
 
-Truth mode では target pose に対し平行移動・回転誤差を加える。
+In truth mode, add translational and rotational errors to the target pose.
 
 ```text
 actual_pose = target_pose * pose_error_transform
 ```
 
-pose は USD から読み取った actual pose を radiation scene に反映する。Planner の predicted pose を直接使わない。
+Read the actual pose from USD and apply it to the radiation scene. Do not use the planner's
+predicted pose directly.
 
-### 18.4 即時効果測定
+### 18.4 Immediate effect measurement
 
-shield placement 完了後:
+After shield placement:
 
-1. geometry revision を更新
-2. Embree instance transform 更新・commit
-3. selected verification poses の predicted dose を計算
-4. measurement robot を verification pose に移動
-5. measurement 実行
-6. residual を生成
+1. Update the geometry revision.
+2. Update and commit the Embree instance transform.
+3. Compute predicted dose at selected verification poses.
+4. Move the measurement robot to a verification pose.
+5. Perform the measurement.
+6. Generate the residual.
 
-## 19. 汚染物体・障害物の移動と撤去
+## 19. Moving and removing contaminated objects and obstacles
 
 ### 19.1 contaminated object
 
-source sample は object local frame に保持する。object pose 更新時に world sample pose を更新する。
+Store source samples in the object's local frame. Update their world poses when the object
+pose changes.
 
 ### 19.2 obstacle
 
-非汚染 obstacle は線源を持たないが、robot reachability、path planning、放射線 attenuation に影響し得る。`rad:material:id` が設定されていれば attenuation geometry として登録する。
+A non-contaminated obstacle has no source, but can affect robot reachability, path planning,
+and radiation attenuation. If `rad:material:id` is set, register it as attenuation geometry.
 
 ### 19.3 move action
 
@@ -1015,29 +1064,30 @@ source sample は object local frame に保持する。object pose 更新時に 
 NAVIGATE -> GRASP/PUSH -> MOVE -> RELEASE -> SETTLE -> UPDATE SOURCE/GEOMETRY
 ```
 
-push と pick の action subtype を持つ。
+Support push and pick action subtypes.
 
 ### 19.4 remove action
 
-単に source を API で無効化してはならない。対象が disposal zone に入ったことを検証した後に、次のいずれかを行う。
+Do not simply disable a source through the API. After verifying that the target entered a
+disposal zone, do one of the following:
 
-- disposal container の shielding を含めた状態で scene 内に残す
-- evaluation domain 外へ搬出して source を deactivate
+- Leave it in the scene with the disposal container's shielding.
+- Move it outside the evaluation domain and deactivate the source.
 
-ログに除去前後の activity 保存先を記録する。
+Log where activity is stored before and after removal.
 
-## 20. measurement・source estimation
+## 20. Measurement and source estimation
 
 ### 20.1 candidate basis
 
-最初の実装は二種類。
+The initial implementation supports two basis types:
 
-- 3D grid basis: unknown point/small voxel source 用
-- surface triangle basis: 床・壁・物体表面の汚染分布用
+- 3D grid basis for unknown point or small voxel sources
+- Surface-triangle basis for contamination on floors, walls, and object surfaces
 
 ### 20.2 Poisson sparse estimator
 
-観測 count `y`、response matrix `H`、background `b` に対し
+For observed counts `y`, response matrix `H`, and background `b`, solve:
 
 ```text
 minimize_x>=0  sum_i [(Hx+b)_i - y_i log((Hx+b)_i)]
@@ -1045,9 +1095,7 @@ minimize_x>=0  sum_i [(Hx+b)_i - y_i log((Hx+b)_i)]
               + lambda_tv TV(x)
 ```
 
-を解く。
-
-実装クラス:
+Implementation classes:
 
 ```python
 class SourceEstimator(Protocol):
@@ -1061,16 +1109,16 @@ class PFPlusMLEEstimator(SourceEstimator): ...   # optional phase
 
 ### 20.3 solver
 
-初期版は SciPy を使用し、次を実装する。
+The initial version uses SciPy and implements:
 
-- nonnegative L-BFGS-B for unregularized MLE
-- proximal gradient/FISTA for L1
-- graph incidence matrix を使う TV proximal の簡略版、または split Bregman
-- gradient test を finite difference で検証
+- Nonnegative L-BFGS-B for unregularized MLE
+- Proximal gradient or FISTA for L1
+- A simplified TV proximal using a graph incidence matrix, or split Bregman
+- Finite-difference verification of gradient tests
 
 ### 20.4 local refinement
 
-sparse grid で得た上位候補を連続座標 MLE で refinement する。
+Refine leading sparse-grid candidates with continuous-coordinate MLE.
 
 ```text
 coarse sparse grid -> connected components -> source seeds
@@ -1079,16 +1127,16 @@ coarse sparse grid -> connected components -> source seeds
 
 ### 20.5 uncertainty
 
-最低限、active set 上の Fisher information 近似を実装する。
+At minimum, implement a Fisher-information approximation on the active set.
 
 ```text
 F = H_A^T diag(1/max(lambda, eps)) H_A + regularization
 Cov = pseudo_inverse(F)
 ```
 
-bootstrap option も用意する。
+Also provide a bootstrap option.
 
-### 20.6 出力
+### 20.6 Output
 
 ```python
 @dataclass(frozen=True)
@@ -1107,7 +1155,7 @@ class SourceEstimate:
 
 ### 21.1 predicted post-action
 
-Planner は BeliefState の clone に action の nominal effect を適用する。
+The planner applies the action's nominal effect to a clone of `BeliefState`.
 
 ```python
 predicted_belief_after = action_model.preview(action, belief_before)
@@ -1119,7 +1167,8 @@ predicted_measurement = forward_model.predict(
 
 ### 21.2 observed post-action
 
-ActionExecutor は TruthState に stochastic actual effect を適用し、実際の USD pose と source activity を更新する。verification measurement を実施する。
+The action executor applies a stochastic actual effect to `TruthState`, updates the actual
+USD pose and source activity, and performs a verification measurement.
 
 ### 21.3 normalized residual
 
@@ -1128,7 +1177,7 @@ r = y_observed - y_predicted
 z = r / sqrt(max(y_predicted + variance_model, 1))
 ```
 
-energy bin、pose、time を保持する。
+Preserve energy bin, pose, and time.
 
 ### 21.4 residual hypotheses
 
@@ -1146,15 +1195,17 @@ class SourceLocalizationErrorHypothesis: ...
 
 #### DeconResidualHypothesis
 
-処理領域内 activity の残存係数を回帰する。
+Regress the residual activity coefficient inside the treated region.
 
 #### ShieldPoseErrorHypothesis
 
-nominal pose 周辺の有限候補を生成し、各候補で predicted measurement を再計算して likelihood 最大の pose correction を求める。
+Generate a finite set of candidates around the nominal pose, recompute predicted
+measurements for each, and select the maximum-likelihood pose correction.
 
 #### HiddenSourceHypothesis
 
-既知 source contribution を引いた residual に対し、未使用 candidate basis 上で sparse inversion を行う。
+Subtract known source contributions from the residual and perform sparse inversion over
+unused candidate bases.
 
 #### GlobalGainBackgroundHypothesis
 
@@ -1162,11 +1213,12 @@ nominal pose 周辺の有限候補を生成し、各候補で predicted measurem
 y_observed ≈ gain * y_predicted + background_offset
 ```
 
-を fit する。
+Fit this model.
 
 ### 21.5 hypothesis selection
 
-各仮説について negative log-likelihood と parameter 数から BIC を計算する。最良仮説と confidence を返し、BeliefState と action effect parameter を更新する。
+For each hypothesis, compute BIC from negative log likelihood and parameter count. Return
+the best hypothesis and confidence, then update `BeliefState` and action-effect parameters.
 
 ## 22. planner
 
@@ -1183,20 +1235,18 @@ class ActionCandidateGenerator:
 
 ### 22.2 feasibility
 
-各 candidate に対し:
+For each candidate, evaluate:
 
-- mobile path の有無
-- manipulator reachability
+- Availability of a mobile path
+- Manipulator reachability
 - collision
 - grasp frame
 - shield placement stability
-- disposal zone capacity
-- resource availability
-- robot availability
+- Disposal-zone capacity
+- Resource availability
+- Robot availability
 
-を評価する。
-
-MVP では deterministic geometric feasibility、physics mode では controller dry-run を使う。
+Use deterministic geometric feasibility for the MVP and a controller dry run in physics mode.
 
 ### 22.3 objective
 
@@ -1211,7 +1261,7 @@ score(a) =
 - w_info * expected_information_gain(a)
 ```
 
-小さいほど良いとする。
+Lower scores are better.
 
 ### 22.4 resource state
 
@@ -1228,14 +1278,14 @@ class ResourceState:
 
 ### 22.5 baseline planners
 
-論文比較用に必ず実装する。
+Always implement these planners for paper comparisons:
 
 - `OpenLoopPlanner`
 - `GreedyDoseReductionPlanner`
 - `NearestSourcePlanner`
 - `RandomPlanner`
-- `OraclePlanner` — TruthState を使うが実験評価専用
-- `ClosedLoopResidualPlanner` — 提案手法
+- `OraclePlanner` — uses `TruthState`, but only for experimental evaluation
+- `ClosedLoopResidualPlanner` — proposed method
 
 ## 23. closed-loop orchestrator
 
@@ -1263,7 +1313,7 @@ class ClosedLoopCoordinator:
     def stop(self) -> None: ...
 ```
 
-遷移:
+Transitions:
 
 ```text
 INITIALIZE
@@ -1278,20 +1328,20 @@ INITIALIZE
  -> PLAN or COMPLETE
 ```
 
-終了条件:
+Termination conditions:
 
-- task path dose が閾値以下
-- peak dose が閾値以下
-- resources 枯渇
-- 最大 step 数
-- 有効 action なし
+- Task-path dose is below the threshold
+- Peak dose is below the threshold
+- Resources are exhausted
+- Maximum step count is reached
+- No valid action remains
 - safety violation
 
-各遷移で immutable snapshot を保存する。
+Save an immutable snapshot at every transition.
 
 ## 24. UI
 
-`radcounter.isaac` は current UI template を基に実装する。
+Implement `radcounter.isaac` from the current UI template.
 
 ### 24.1 Frames
 
@@ -1335,11 +1385,12 @@ INITIALIZE
    - run ID
    - save report
 
-UI callback 内で重い計算を同期実行しない。async task を生成し、進捗と cancel token を管理する。
+Do not run heavy computation synchronously inside UI callbacks. Create asynchronous tasks
+and manage progress and cancellation tokens.
 
 ## 25. ROS 2 interface
 
-core functionality は ROS 2 なしで動作する。ROS 2 は adapter とする。
+Core functionality must work without ROS 2. Treat ROS 2 as an adapter.
 
 ### 25.1 messages
 
@@ -1392,7 +1443,7 @@ ResetEpisode.srv
 
 ### 25.3 robot topics
 
-標準 `/tf`, `/joint_states`, `/cmd_vel`, FollowJointTrajectory、MoveIt 2 を使用する。
+Use standard `/tf`, `/joint_states`, `/cmd_vel`, `FollowJointTrajectory`, and MoveIt 2.
 
 ## 26. scenario configuration
 
@@ -1501,9 +1552,10 @@ outputs:
   save_video: false
 ```
 
-`validate_scenario.py` で schema、asset path、unit、prim path、material table の整合性を Isaac Sim 起動前に検査する。
+Before starting Isaac Sim, use `validate_scenario.py` to check consistency among the
+schema, asset paths, units, prim paths, and material table.
 
-## 27. logging と実験再現性
+## 27. Logging and experiment reproducibility
 
 run directory:
 
@@ -1528,13 +1580,13 @@ outputs/<scenario>/<timestamp>_<run_id>/
 - dirty status
 - Isaac Sim version
 - Embree version
-- OS、CPU、GPU
+- OS, CPU, and GPU
 - Python package versions
 - random seeds
 - config SHA256
 - asset SHA256
 
-重要な event:
+Important events:
 
 - scene loaded
 - radiation scene committed
@@ -1551,44 +1603,44 @@ outputs/<scenario>/<timestamp>_<run_id>/
 
 ### 28.1 unit tests — radiation
 
-1. 自由空間 point source が `1/r^2` に従う。
-2. 単一 slab が `exp(-mu*l)` に従う。
-3. 二材料 slab の exponent が加算される。
-4. thin sheet の斜入射厚さが正しい。
-5. closed cube の entry/exit 通過長が正しい。
-6. nested solids が正しい。
-7. surface source rectangle が高密度数値積分の基準値に収束する。
-8. zero activity、disabled source、zero efficiency を扱える。
-9. Poisson seed で結果が再現する。
-10. cache invalidation が revision 規則どおり。
+1. A point source in free space follows `1/r^2`.
+2. A single slab follows `exp(-mu*l)`.
+3. Exponents from a two-material slab add correctly.
+4. Oblique-incidence thickness is correct for a thin sheet.
+5. Entry/exit path length through a closed cube is correct.
+6. Nested solids are correct.
+7. A rectangular surface source converges to a high-density numerical-integration reference.
+8. Zero activity, disabled sources, and zero efficiency are handled.
+9. A Poisson seed reproduces results.
+10. Cache invalidation follows the revision rules.
 
 ### 28.2 unit tests — actions
 
-1. 50% nominal decon で対象 triangle activity が半減する。
-2. 非対象 triangle は変化しない。
-3. repeated decon が累積する。
-4. removed activity が waste source に移る。
-5. shield placement で geometry revision が増える。
-6. shield move で transmission が変化する。
-7. contaminated object move で source sample pose が追従する。
-8. disposal zone 前には source が deactivate されない。
+1. A nominal 50% decontamination action halves target-triangle activity.
+2. Non-target triangles do not change.
+3. Repeated decontamination accumulates.
+4. Removed activity moves to the waste source.
+5. Shield placement increments the geometry revision.
+6. Shield movement changes transmission.
+7. Source-sample poses follow movement of a contaminated object.
+8. A source is not deactivated before reaching the disposal zone.
 
 ### 28.3 unit tests — estimation
 
-1. noiseless single source を回収する。
-2. Poisson noisy single source の平均誤差が許容範囲。
-3. two-source case。
-4. surface sparse patch。
-5. regularization zero と nonzero。
-6. gradient finite-difference check。
-7. Fisher covariance shape/positive semidefinite。
+1. Recover a noiseless single source.
+2. Mean error for a Poisson-noisy single source is within tolerance.
+3. Two-source case.
+4. Sparse surface patch.
+5. Test zero and nonzero regularization.
+6. Finite-difference gradient check.
+7. Fisher covariance shape and positive semidefiniteness.
 
 ### 28.4 unit tests — residual
 
-1. decon residual hypothesis を正しく選ぶ。
-2. shield translation error を近似回収する。
-3. hidden source を新規 candidate として検出する。
-4. global gain error を source error と誤分類しにくい。
+1. Select the decontamination-residual hypothesis correctly.
+2. Approximately recover shield translation error.
+3. Detect a hidden source as a new candidate.
+4. Avoid misclassifying global gain error as source error.
 
 ### 28.5 integration tests — headless Isaac
 
@@ -1617,7 +1669,8 @@ outputs/<scenario>/<timestamp>_<run_id>/
 
 ### 28.6 regression tests
 
-fixed seed の小シナリオについて、主要 metric と map hash を保存する。version update で差が出た場合は理由をレビューする。
+For small fixed-seed scenarios, save key metrics and map hashes. Review the reason for any
+difference after a version update.
 
 ## 29. validation criteria
 
@@ -1625,29 +1678,30 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 
 - free-space analytic relative error < 1e-6
 - slab attenuation relative error < 1e-4
-- surface quadrature convergence を report
-- material path debug で期待長と一致
+- Report surface-quadrature convergence.
+- Material-path debugging matches expected lengths.
 
 ### 29.2 functional
 
-- 全 action が deterministic mode で完走
-- physics mode で最低一つの shield pick-and-place と obstacle move が完走
-- decon footprint が tool path に沿って activity map を更新
-- action 後の detector measurement が scene state を反映
-- estimator が TruthState を参照していないことを test double で保証
+- Every action completes in deterministic mode.
+- At least one shield pick-and-place and obstacle movement completes in physics mode.
+- The decontamination footprint updates the activity map along the tool path.
+- Detector measurements after an action reflect scene state.
+- A test double proves that the estimator does not read `TruthState`.
 
 ### 29.3 performance target
 
-基準機を manifest に明記し、次を初期目標とする。
+Identify reference hardware in the manifest and use these initial targets:
 
-- 100,000 segment rays の transmission query: 0.2 s 以下
-- 2D 128×128 map、source samples 2,000、cache 未使用: 2 s 以下
-- activity-only update 後の map: 0.1 s 以下
-- shield pose update + verification 32 poses: 0.5 s 以下
+- Transmission query for 100,000 segment rays: at most 0.2 s
+- 2D 128 x 128 map with 2,000 source samples and no cache: at most 2 s
+- Map after an activity-only update: at most 0.1 s
+- Shield-pose update plus verification at 32 poses: at most 0.5 s
 
-未達でも correctness を優先し、benchmark result を保存する。性能値を論文に使う場合は reference hardware と scene complexity を併記する。
+Prioritize correctness even when a target is missed, and save benchmark results. When
+publishing performance values, report the reference hardware and scene complexity.
 
-## 30. 実装順序
+## 30. Implementation order
 
 ### Milestone 0: scaffold
 
@@ -1657,7 +1711,7 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - config validation
 - logging skeleton
 
-完了条件: Isaac Sim で UI が表示され、headless startup test が通る。
+Completion criterion: the UI appears in Isaac Sim and the headless startup test passes.
 
 ### Milestone 1: analytic radiation core
 
@@ -1668,7 +1722,7 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - analytic backend
 - unit tests
 
-完了条件: free-space/slab tests pass。
+Completion criterion: free-space and slab tests pass.
 
 ### Milestone 2: USD registry + mesh extraction
 
@@ -1677,7 +1731,8 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - mesh triangulation
 - revision management
 
-完了条件: demo USD から期待した source/attenuator descriptors が得られる。
+Completion criterion: the expected source and attenuator descriptors are obtained from
+the demo USD.
 
 ### Milestone 3: Embree backend
 
@@ -1687,7 +1742,7 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - multi-hit path length
 - benchmarks
 
-完了条件: analytic slab/cube tests と batch performance test pass。
+Completion criterion: analytic slab/cube tests and the batch performance test pass.
 
 ### Milestone 4: source sampling + radiation sensor
 
@@ -1696,7 +1751,7 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - Poisson measurement
 - rotating shield sensor
 
-完了条件: robot-mounted sensor が計測を返す。
+Completion criterion: a robot-mounted sensor returns a measurement.
 
 ### Milestone 5: map/cache/visualization
 
@@ -1705,7 +1760,8 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - dose map
 - UI visualization
 
-完了条件: decon activity update が ray rebuild なしに map を更新。
+Completion criterion: a decontamination activity update refreshes the map without
+rebuilding rays.
 
 ### Milestone 6: deterministic countermeasure actions
 
@@ -1715,7 +1771,7 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - resources
 - action state machine
 
-完了条件: 全 action の統合試験 pass。
+Completion criterion: integration tests for every action pass.
 
 ### Milestone 7: robot physics execution
 
@@ -1726,7 +1782,7 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - obstacle/source object movement
 - decon tool contact
 
-完了条件: physics mode smoke test pass。
+Completion criterion: the physics-mode smoke test passes.
 
 ### Milestone 8: estimation
 
@@ -1735,7 +1791,7 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - uncertainty
 - estimate visualization
 
-完了条件: synthetic recovery tests pass。
+Completion criterion: synthetic recovery tests pass.
 
 ### Milestone 9: residual diagnosis
 
@@ -1744,7 +1800,7 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - four residual hypotheses
 - belief update
 
-完了条件: fault injection tests pass。
+Completion criterion: fault-injection tests pass.
 
 ### Milestone 10: planner + closed loop
 
@@ -1755,7 +1811,9 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - baselines
 - coordinator
 
-完了条件: closed-loop demo が open-loop baseline より指定 metric で改善するテストを生成。ただし固定の有意差を CI pass 条件にはしない。
+Completion criterion: generate a test in which the closed-loop demo improves the specified
+metric over an open-loop baseline. Do not require a fixed statistical significance margin
+for CI to pass.
 
 ### Milestone 11: ROS 2 and experiment automation
 
@@ -1764,39 +1822,43 @@ fixed seed の小シナリオについて、主要 metric と map hash を保存
 - batch runner
 - reports
 
-完了条件: ROS 2 measurement と action round trip、headless sweep 実行。
+Completion criterion: ROS 2 measurement and action round trips work, and the headless
+sweep runs.
 
 ## 31. Definition of Done
 
-次の全項目を満たした時点で「シミュレーション実装完了」とする。
+The simulator is implementation-complete only when every item below is satisfied:
 
-- GUI と headless の双方で起動できる。
-- point/source surface/contaminated object source を扱える。
-- air/solid/thin-sheet attenuation を扱える。
-- decon、shield、move、remove が scene と放射線場を更新する。
-- mobile robot と manipulator の action interface がある。
-- deterministic mode で全 action が完走する。
-- physics mode で shield と object manipulation の実例がある。
-- detector count と dose map を action 前後で即時更新できる。
-- source estimation と uncertainty が動く。
-- predicted/observed/residual が保存・可視化される。
-- residual に基づく belief update が動く。
-- resource-constrained planner と baselines が動く。
-- TruthState leakage test が通る。
-- 全 unit/integration tests が通る。
-- version/seed/config/hardware を含む manifest が保存される。
-- API と scenario schema の文書がある。
-- 一つの end-to-end closed-loop demo と再現スクリプトがある。
+- It starts in both GUI and headless modes.
+- It supports point sources, surface sources, and sources on contaminated objects.
+- It supports air, solid, and thin-sheet attenuation.
+- Decontamination, shielding, movement, and removal update both scene and radiation field.
+- Mobile-robot and manipulator action interfaces exist.
+- Every action completes in deterministic mode.
+- Physics mode includes demonstrated shield and object manipulation.
+- Detector counts and dose maps update immediately before and after actions.
+- Source estimation and uncertainty work.
+- Predicted values, observations, and residuals are saved and visualized.
+- Belief updates based on residuals work.
+- The resource-constrained planner and baselines work.
+- The `TruthState` leakage test passes.
+- All unit and integration tests pass.
+- A manifest containing version, seed, configuration, and hardware is saved.
+- The API and scenario schema are documented.
+- One end-to-end closed-loop demo and reproduction script exist.
 
-## 32. 実装上の禁止事項
+## 32. Prohibited implementation practices
 
-- Estimator/Planner から TruthState にアクセスしない。
-- 除染と遮蔽を同一の activity scale 操作として実装しない。
-- 遮蔽設置後に predicted pose をそのまま radiation engine に渡さず、USD actual pose を読む。
-- 毎 physics tick に全 dose map を再計算しない。
-- 巨大 per-face activity array を USD custom attribute に直接埋め込まない。
-- source activity、dose、count、length の単位を曖昧にしない。
-- UI callback で重い同期計算をしない。
-- 物理データ値を出典・version なしに hardcode しない。
-- action 実装を単なる見た目の animation にしない。scene state と radiation state の一貫性を必ず更新する。
-- action 後の効果を TruthState の差から Planner に直接伝えない。必ず再計測を経由する。
+- Never access `TruthState` from an estimator or planner.
+- Do not implement decontamination and shielding as the same activity-scaling operation.
+- After shield placement, read the actual USD pose instead of passing the predicted pose
+  directly to the radiation engine.
+- Do not recompute the entire dose map on every physics tick.
+- Do not embed large per-face activity arrays directly in USD custom attributes.
+- Do not leave units for source activity, dose, count, or length ambiguous.
+- Do not run heavy synchronous computation in UI callbacks.
+- Do not hardcode physical data without a source and version.
+- Do not implement actions as visual animation only. Always update scene state and radiation
+  state consistently.
+- Do not reveal post-action effects to the planner through direct `TruthState` differences.
+  Always obtain them through remeasurement.

@@ -33,11 +33,12 @@ if _extension_namespace not in _radcounter_package.__path__:
 
 
 DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION = (
-    "不規則な壁面Cs-137面状線源を、初期活動量に対する残存率60%以下になるまで"
-    "最大3回の範囲で全面蛇行除染してください。次に同じ主鉛遮蔽体LeadShieldを"
-    "線源から保護区域への25%位置へ配置し、その同じ遮蔽体を65%位置へ再配置して"
-    "ください。Protected測定地点へ移動して2秒測定し、測定ロボットを開始位置へ"
-    "戻して、最後に現在の状態を表示してください。"
+    "Decontaminate the entire irregular wall-mounted Cs-137 surface source with a "
+    "serpentine pass until the remaining fraction is no more than 60%, using at most "
+    "3 passes. Then place the same primary lead shield, LeadShield, at "
+    "25% of the source-to-protected-area line and move that same shield to 65%. "
+    "Move to the Protected measurement station, measure for 2 seconds, return the "
+    "measurement robot to its starting position, and finally show the current status."
 )
 DEFAULT_GUI_MAX_FPS = 60.0
 
@@ -1469,7 +1470,7 @@ def _exercise_robot_monitor(app: Any, dashboard: Any) -> dict[str, object]:
 
     monitor.begin_operation(
         robot_id=robot_id,
-        operation="除染",
+        operation="Decontamination",
         phase="navigating",
         route_m=((0.0, 0.0, 0.0), (1.0, 0.5, 0.0)),
         target_m=(1.0, 0.5, 1.0),
@@ -2004,7 +2005,7 @@ def _run_validation(
             0,
             0,
             {
-                "languages": ["ja", "en"],
+                "languages": ["en"],
                 "available_actions": len(context_view.available_actions),
                 "local_inference": "llama.cpp + Qwen3-4B GGUF",
             },
@@ -2019,7 +2020,7 @@ def _run_validation(
                 "measurement": "NVIDIA Nova Carter",
             },
             "natural_language": {
-                "languages": ["ja", "en"],
+                "languages": ["en"],
                 "backend": "bundled llama.cpp",
                 "model": "Qwen3-4B-Q4_K_M.gguf",
                 "available_actions": len(context_view.available_actions),
@@ -2386,18 +2387,6 @@ def main(argv: list[str] | None = None) -> int:
             "height": 1000,
             "window_width": 1600,
             "window_height": 1000,
-            # Omni UI builds its glyph atlas before the dashboard is created.
-            # Register Isaac Sim's bundled Noto Japanese font and glyph list at
-            # process startup; per-widget font styling alone cannot add CJK glyphs.
-            "extra_args": [
-                "--/app/font/useJapaneseRegion=true",
-                "--/app/font/japaneseFontPath=${omni.kit.renderer.imgui}/data/tests/fonts/"
-                "NotoSansJP-SemiBold.ttf",
-                "--/app/font/customFontPath=${omni.kit.renderer.imgui}/data/tests/fonts/"
-                "NotoSansJP-SemiBold.ttf",
-                "--/app/font/customRegionFiles=[${omni.kit.renderer.imgui}/data/tests/"
-                "fonts/japanese_all.txt]",
-            ],
         }
     )
     panel = None

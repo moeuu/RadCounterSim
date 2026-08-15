@@ -93,8 +93,8 @@ def _decon_row(
 
 def _passing_payload() -> tuple[dict[str, object], list[dict[str, object]]]:
     plan: dict[str, object] = {
-        "language": "ja",
-        "summary": "複合除染・遮蔽・測定プロセス",
+        "language": "en",
+        "summary": "Combined decontamination, shielding, and measurement process",
         "steps": [
             {
                 "command": "execute_candidate",
@@ -125,9 +125,7 @@ def _passing_payload() -> tuple[dict[str, object], list[dict[str, object]]]:
             {"command": "show_status", "max_attempts": 1},
         ],
     }
-    collateral = [
-        {"object_path": "/World/MovableObstacle", "displacement_m": 0.003}
-    ]
+    collateral = [{"object_path": "/World/MovableObstacle", "displacement_m": 0.003}]
     results = [
         _decon_row(1, 100.0, 79.0, 0.79, condition_met=False),
         _decon_row(2, 79.0, 63.0, 0.63, condition_met=False),
@@ -190,18 +188,14 @@ def _passing_payload() -> tuple[dict[str, object], list[dict[str, object]]]:
             6,
             command="return_measurement_robot",
             status="completed",
-            public_details={
-                "motion_audit": {"success": True, "displacement_m": 4.0}
-            },
+            public_details={"motion_audit": {"success": True, "displacement_m": 4.0}},
         ),
         _workflow_row(7, command="show_status", status="ready"),
     ]
     return plan, results
 
 
-def _audit(
-    plan: dict[str, object], results: list[dict[str, object]]
-) -> dict[str, object]:
+def _audit(plan: dict[str, object], results: list[dict[str, object]]) -> dict[str, object]:
     return _complex_process_audit(
         plan,
         results,
@@ -218,9 +212,7 @@ def _audit(
 
 
 def test_complex_validation_cli_requires_visible_separate_mode() -> None:
-    args = _arguments(
-        ["--complex-natural-language-validation", "--no-keep-open"]
-    )
+    args = _arguments(["--complex-natural-language-validation", "--no-keep-open"])
     assert args.complex_natural_language_validation is True
     assert args.keep_open is False
     assert args.headless is False
@@ -271,14 +263,18 @@ def test_gui_frame_limiter_accounts_for_update_time() -> None:
 
 
 def test_default_instruction_requests_achievable_bounded_complex_process() -> None:
-    assert "不規則な壁面Cs-137面状線源" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
-    assert "残存率60%以下" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
-    assert "最大3回" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
+    assert "irregular wall-mounted Cs-137 surface source" in (
+        DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
+    )
+    assert "remaining fraction is no more than 60%" in (
+        DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
+    )
+    assert "at most 3 passes" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "LeadShield" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "25%" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "65%" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
     assert "Protected" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
-    assert "2秒測定" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
+    assert "measure for 2 seconds" in DEFAULT_COMPLEX_NATURAL_LANGUAGE_INSTRUCTION
 
 
 def test_default_instruction_repairs_small_model_refusal_to_primary_shield_process() -> None:
@@ -329,8 +325,8 @@ def test_default_instruction_repairs_small_model_refusal_to_primary_shield_proce
         ),
     )
     refusal = CommandPlan(
-        language="ja",
-        summary="状態だけを表示します",
+        language="en",
+        summary="Show status only",
         steps=(CommandStep(command=CommandName.SHOW_STATUS),),
     )
     repaired = _normalize_plan(
@@ -362,18 +358,14 @@ def test_complex_process_audit_accepts_ordered_bounded_public_results() -> None:
     audit = _audit(plan, results)
     assert audit["failed_invariants"] == []
     assert audit["decontamination"]["executed_attempts"] == 3
-    assert audit["collateral_motion"]["maximum_displacement_m"] == pytest.approx(
-        0.003
-    )
+    assert audit["collateral_motion"]["maximum_displacement_m"] == pytest.approx(0.003)
 
 
 @pytest.mark.parametrize(
     ("mutation", "failed_invariant"),
     [
         (
-            lambda rows: rows[4]["public_details"].update(
-                object_path="/World/StagingLeadShield"
-            ),
+            lambda rows: rows[4]["public_details"].update(object_path="/World/StagingLeadShield"),
             "same_primary_shield_placed_at_25_then_moved_to_65",
         ),
         (
