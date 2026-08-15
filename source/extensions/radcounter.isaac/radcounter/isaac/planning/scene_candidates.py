@@ -43,6 +43,10 @@ class SceneCandidateConfig:
         (3.4, -1.8),
     )
     dose_proxy_to_sv_h: float = 1.0e-12
+    # A compound CAD building may expose one collision mesh whose AABB covers
+    # all of its traversable rooms.  Curated spawn anchors can opt that root
+    # out of the coarse AABB planner while PhysX still enforces its triangles.
+    ignored_collision_paths: tuple[str, ...] = ()
 
 
 class IsaacSceneFeasibilityProbe:
@@ -57,9 +61,7 @@ class IsaacSceneFeasibilityProbe:
         self.stage = stage
         self.config = config
         self.controller = controller
-        self._collision_bounds_cache: (
-            tuple[tuple[str, np.ndarray, np.ndarray], ...] | None
-        ) = None
+        self._collision_bounds_cache: tuple[tuple[str, np.ndarray, np.ndarray], ...] | None = None
 
     @staticmethod
     def _attribute(prim: Any, name: str, default: object = None) -> object:
@@ -141,7 +143,11 @@ class IsaacSceneFeasibilityProbe:
             if moving_robot_path is None
             else (moving_robot_path,)
         )
-        ignored = (*ignored_robots, *excluded_paths)
+        ignored = (
+            *ignored_robots,
+            *excluded_paths,
+            *getattr(self.config, "ignored_collision_paths", ()),
+        )
         clearance = self.config.mobile_clearance_m
         obstacles: list[tuple[str, np.ndarray, np.ndarray]] = []
         for path, lower, upper in self._collision_bounds():
@@ -169,14 +175,10 @@ class IsaacSceneFeasibilityProbe:
             robot_lower, robot_upper = robot_bounds
             expanded_lower = robot_lower - np.asarray((clearance, clearance, 0.05))
             expanded_upper = robot_upper + np.asarray((clearance, clearance, 0.05))
-            obstacles.append(
-                (f"{robot_path}:articulated_bounds", expanded_lower, expanded_upper)
-            )
+            obstacles.append((f"{robot_path}:articulated_bounds", expanded_lower, expanded_upper))
         if carried_object_path is not None:
             if carried_base_position_m is None:
-                raise ValueError(
-                    "carried_base_position_m is required with carried_object_path"
-                )
+                raise ValueError("carried_base_position_m is required with carried_object_path")
             carried_bounds = self.bounds(carried_object_path)
             if carried_bounds is None:
                 raise ValueError(f"carried object has no bounds: {carried_object_path}")
@@ -347,6 +349,7 @@ class IsaacSceneFeasibilityProbe:
             self.config.countermeasure_robot_path,
             self.config.measurement_robot_path,
             *excluded_paths,
+            *getattr(self.config, "ignored_collision_paths", ()),
         )
         clearance = float(self.config.mobile_clearance_m)
         for path, lower, upper in self._collision_bounds():
@@ -367,18 +370,13 @@ class IsaacSceneFeasibilityProbe:
     ) -> bool:
         target = np.asarray(target_m, dtype=np.float64)
         robot = self.world_position(
-            self.config.countermeasure_pose_path
-            or self.config.countermeasure_robot_path
+            self.config.countermeasure_pose_path or self.config.countermeasure_robot_path
         )
         planned_base = robot if planned_base_m is None else np.asarray(planned_base_m)
-        if self.controller is not None and hasattr(
-            self.controller, "check_reachability"
-        ):
+        if self.controller is not None and hasattr(self.controller, "check_reachability"):
             try:
                 return bool(
-                    self.controller.check_reachability(
-                        target, base_position_m=planned_base
-                    )
+                    self.controller.check_reachability(target, base_position_m=planned_base)
                 )
             except TypeError:
                 if np.linalg.norm(planned_base - robot) <= 0.05:
@@ -427,11 +425,7 @@ class IsaacSceneFeasibilityProbe:
             movable_neighbor = False
             while prim and prim.IsValid() and str(prim.GetPath()) != "/":
                 movable = prim.GetAttribute("rad:manipulation:movable")
-                if (
-                    movable
-                    and movable.HasAuthoredValueOpinion()
-                    and bool(movable.Get())
-                ):
+                if movable and movable.HasAuthoredValueOpinion() and bool(movable.Get()):
                     movable_neighbor = True
                     break
                 prim = prim.GetParent()
@@ -490,8 +484,7 @@ class IsaacSceneFeasibilityProbe:
         requires_disposal: bool = False,
     ) -> FeasibilityFacts:
         robot_position = self.world_position(
-            self.config.countermeasure_pose_path
-            or self.config.countermeasure_robot_path
+            self.config.countermeasure_pose_path or self.config.countermeasure_robot_path
         )
         path_to_pickup = self.mobile_path_available(
             robot_position,
@@ -515,14 +508,10 @@ class IsaacSceneFeasibilityProbe:
             excluded_paths=(() if object_path is None else (object_path,)),
         )
         pickup_target = (
-            target_m
-            if pickup_manipulator_target_m is None
-            else pickup_manipulator_target_m
+            target_m if pickup_manipulator_target_m is None else pickup_manipulator_target_m
         )
         placement_target = (
-            target_m
-            if placement_manipulator_target_m is None
-            else placement_manipulator_target_m
+            target_m if placement_manipulator_target_m is None else placement_manipulator_target_m
         )
         return FeasibilityFacts(
             mobile_path_available=(
@@ -849,9 +838,7 @@ class IsaacActionCandidateGenerator:
                             "full_coverage_serpentine_raster",
                         )
                     ),
-                    "raster_rows": int(
-                        self._attribute(prim, "rad:decon:rasterRows", 6)
-                    ),
+                    "raster_rows": int(self._attribute(prim, "rad:decon:rasterRows", 6)),
                     "duration_s": self.config.decon_duration_s,
                     "pickup_base_position_m": base.tolist(),
                     "placement_base_position_m": base.tolist(),
@@ -903,20 +890,14 @@ class IsaacActionCandidateGenerator:
             shield_root = self.probe.world_position(shield)
             root_from_center = shield_root - pickup
             frame_name = str(self._attribute(shield, "rad:manipulation:graspFrame", ""))
-            grasp_position = self.probe.world_position(
-                f"{shield_path.rstrip('/')}/{frame_name}"
-            )
+            grasp_position = self.probe.world_position(f"{shield_path.rstrip('/')}/{frame_name}")
             grasp_from_root = grasp_position - shield_root
-            pickup_base = self._base_for_end_effector(
-                grasp_position, robot_z=float(robot[2])
-            )
+            pickup_base = self._base_for_end_effector(grasp_position, robot_z=float(robot[2]))
             for fraction in self.config.shield_line_fractions:
                 target = source + fraction * (protected - source)
                 target[2] = pickup[2]
                 target_root = target + root_from_center
-                placement_options: list[
-                    tuple[float, np.ndarray, np.ndarray, FeasibilityFacts]
-                ] = []
+                placement_options: list[tuple[float, np.ndarray, np.ndarray, FeasibilityFacts]] = []
                 # This panel has one physical service handle on its west face.
                 # The controller preserves the payload's world orientation, so
                 # a pi-yaw fallback would put the Ridgeback east of the plate
@@ -947,8 +928,7 @@ class IsaacActionCandidateGenerator:
                     (
                         option
                         for option in placement_options
-                        if option[3].mobile_path_available
-                        and option[3].manipulator_reachable
+                        if option[3].mobile_path_available and option[3].manipulator_reachable
                     ),
                     placement_options[0],
                 )
@@ -960,9 +940,7 @@ class IsaacActionCandidateGenerator:
                     # state transition.  A confirmed multi-step workflow can
                     # therefore re-resolve the same placement option against
                     # the live scene and receive MOVE_SHIELD after deployment.
-                    action_type=(
-                        ActionType.MOVE_SHIELD if deployed else ActionType.PLACE_SHIELD
-                    ),
+                    action_type=(ActionType.MOVE_SHIELD if deployed else ActionType.PLACE_SHIELD),
                     robot_id=self.config.countermeasure_robot_path,
                     target_prim_path=shield_path,
                     target_pose_world=self._pose(target_root),
@@ -983,11 +961,7 @@ class IsaacActionCandidateGenerator:
                         "shield_units": (
                             0
                             if deployed
-                            else int(
-                                self._attribute(
-                                    shield, "rad:shield:resourceUnits", 1
-                                )
-                            )
+                            else int(self._attribute(shield, "rad:shield:resourceUnits", 1))
                         ),
                         "placement_fraction": float(fraction),
                         "deployment_state": deployment_state,
@@ -1029,9 +1003,7 @@ class IsaacActionCandidateGenerator:
             object_root = self.probe.world_position(prim)
             root_from_center = object_root - pickup
             frame_name = str(self._attribute(prim, "rad:manipulation:graspFrame", ""))
-            grasp_position = self.probe.world_position(
-                f"{object_path.rstrip('/')}/{frame_name}"
-            )
+            grasp_position = self.probe.world_position(f"{object_path.rstrip('/')}/{frame_name}")
             grasp_from_root = grasp_position - object_root
             pickup_base = self._base_for_end_effector(
                 grasp_position,
@@ -1144,9 +1116,7 @@ class IsaacActionCandidateGenerator:
                     "disposal_zone_path": self.config.disposal_zone_path,
                     "pickup_base_position_m": removal_pickup_base.tolist(),
                     "placement_base_position_m": removal_base.tolist(),
-                    "pickup_base_route_m": self._route(
-                        robot, removal_pickup_base, object_path
-                    ),
+                    "pickup_base_route_m": self._route(robot, removal_pickup_base, object_path),
                     "placement_base_route_m": self._route(
                         removal_pickup_base,
                         removal_base,

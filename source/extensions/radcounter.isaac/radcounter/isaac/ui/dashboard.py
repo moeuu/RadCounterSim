@@ -137,14 +137,12 @@ class RadCounterDashboard:
                 style={"font_size": 12, "color": 0xFF9FA6AD},
             )
             ui.Separator(height=4)
-            self._build_system_selector()
-            ui.Separator(height=4)
             ui.Label(
                 "NATURAL LANGUAGE COMMAND / ROBOT LLM",
                 style={"font_size": 11, "color": 0xFFE3B341},
             )
             ui.Label(
-                "ロボット作業を日本語またはEnglishで指示してください。構成変更は上の選択欄で行います。",
+                "ロボット作業を日本語またはEnglishで指示してください。構成変更は下の選択欄で行います。",
                 word_wrap=True,
                 style=self._operator_style(font_size=12, color=0xFFB8BDC3),
             )
@@ -191,6 +189,8 @@ class RadCounterDashboard:
                 height=90,
                 style=self._operator_style(font_size=12, color=0xFFD3D7DC),
             )
+            ui.Separator(height=4)
+            self._build_system_selector()
             ui.Separator(height=4)
             with ui.HStack(height=34, spacing=8):
                 self._load_scene_button = ui.Button(
@@ -430,9 +430,7 @@ class RadCounterDashboard:
             self._set_combo_index(
                 self._environment_combo, self._environment_ids, profile.environment
             )
-            self._set_combo_index(
-                self._robot_set_combo, self._robot_set_ids, profile.robot_set
-            )
+            self._set_combo_index(self._robot_set_combo, self._robot_set_ids, profile.robot_set)
             self._set_combo_index(
                 self._detector_set_combo, self._detector_set_ids, profile.detector_set
             )
@@ -484,9 +482,7 @@ class RadCounterDashboard:
         for index, script in enumerate(scripts, start=1):
             if script.suffix != ".py" or self.root not in script.parents or not script.is_file():
                 raise ValueError(f"許可されていない環境準備スクリプトです: {script}")
-            self._status.set_value(
-                f"環境を準備中です ({index}/{len(scripts)}): {script.stem}"
-            )
+            self._status.set_value(f"環境を準備中です ({index}/{len(scripts)}): {script.stem}")
             process = await asyncio.create_subprocess_exec(
                 str(python),
                 str(script),
@@ -574,9 +570,7 @@ class RadCounterDashboard:
             self._sync_system_controls(selection)
             self._status.set_value(f"構成を適用しました: {selection.profile.display_name}")
         except Exception as exc:
-            self._status.set_value(
-                f"構成の適用に失敗しました: {type(exc).__name__}: {exc}"
-            )
+            self._status.set_value(f"構成の適用に失敗しました: {type(exc).__name__}: {exc}")
         finally:
             self._set_system_controls_enabled(True)
             self._update_system_preview()
@@ -677,9 +671,7 @@ class RadCounterDashboard:
             ]
             final = motions[-1].get("final_position_m")
             measurement = (
-                ""
-                if measurement_duration_s is None
-                else f" → {measurement_duration_s:g}秒測定"
+                "" if measurement_duration_s is None else f" → {measurement_duration_s:g}秒測定"
             )
             if returned_home and len(distances) >= 2:
                 final_text = ""
@@ -830,9 +822,7 @@ class RadCounterDashboard:
                 )
             except Exception as exc:
                 self.simulation = None
-                self._status.set_value(
-                    f"Profile reload failed: {type(exc).__name__}: {exc}"
-                )
+                self._status.set_value(f"Profile reload failed: {type(exc).__name__}: {exc}")
                 return
             self._status.set_value(f"Reloaded {self._system_display_name}.")
             return
@@ -1239,9 +1229,7 @@ class RadCounterDashboard:
 
     def _return_measurement_robot_command_sync(self) -> dict[str, object]:
         services = self._workflow_services
-        controller = (
-            None if services is None else getattr(services, "measurement_controller", None)
-        )
+        controller = None if services is None else getattr(services, "measurement_controller", None)
         if controller is None:
             raise RuntimeError("measurement robot controller is not initialized")
         self._navigation_status_prefix = "測定ロボットが開始位置へ帰還中"

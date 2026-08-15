@@ -48,6 +48,14 @@ class ComplexNaturalLanguageValidationError(RuntimeError):
         self.audit = dict(audit)
 
 
+class DecontaminationSmokeValidationError(RuntimeError):
+    """Preserve contact and motion evidence when the CAD smoke gate fails."""
+
+    def __init__(self, message: str, audit: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.audit = dict(audit)
+
+
 def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=False)
@@ -84,15 +92,22 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--detector-set")
     parser.add_argument("--selection-file", type=Path)
     parser.add_argument(
+        "--decontamination-smoke-test",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "compose the articulated decontamination task on the selected "
+            "environment and execute one contact-verified raster"
+        ),
+    )
+    parser.add_argument(
         "--artifact",
         type=Path,
         default=ROOT / "artifacts/gui-validation/latest.json",
     )
     arguments = parser.parse_args(argv)
     if arguments.interactive and arguments.complex_natural_language_validation:
-        parser.error(
-            "--interactive and --complex-natural-language-validation are separate modes"
-        )
+        parser.error("--interactive and --complex-natural-language-validation are separate modes")
     if arguments.complex_natural_language_validation and arguments.headless:
         parser.error(
             "--complex-natural-language-validation requires a visible GUI; remove --headless"
@@ -335,7 +350,12 @@ def _configure_camera(stage: Any) -> None:
         print(f"camera configuration warning: {type(error).__name__}: {error}", flush=True)
 
 
-def _configure_decon_room_camera(stage: Any) -> None:
+def _configure_decon_room_camera(
+    stage: Any,
+    *,
+    eye_m: tuple[float, float, float] = (10.25, -2.10, 2.75),
+    target_m: tuple[float, float, float] = (14.30, 0.80, 1.12),
+) -> None:
     """Leave interactive runs focused on the irregular source and real tool."""
 
     try:
@@ -346,8 +366,8 @@ def _configure_decon_room_camera(stage: Any) -> None:
         camera = UsdGeom.Camera.Define(stage, path)
         camera.CreateFocalLengthAttr(25.0)
         view = Gf.Matrix4d().SetLookAt(
-            Gf.Vec3d(10.25, -2.10, 2.75),
-            Gf.Vec3d(14.30, 0.80, 1.12),
+            Gf.Vec3d(*eye_m),
+            Gf.Vec3d(*target_m),
             Gf.Vec3d(0.0, 0.0, 1.0),
         )
         UsdGeom.Xformable(camera).MakeMatrixXform().Set(view.GetInverse())
@@ -444,24 +464,16 @@ def _environment_audit(
                 {
                     "path": path,
                     "corridor_id": str(corridor_id),
-                    "from_room_id": str(
-                        _attribute_value(prim, "rad:facility:fromRoomId", "")
-                    ),
-                    "to_room_id": str(
-                        _attribute_value(prim, "rad:facility:toRoomId", "")
-                    ),
+                    "from_room_id": str(_attribute_value(prim, "rad:facility:fromRoomId", "")),
+                    "to_room_id": str(_attribute_value(prim, "rad:facility:toRoomId", "")),
                 }
             )
         if role == "facility_equipment":
             equipment.append(
                 {
                     "path": path,
-                    "equipment_id": str(
-                        _attribute_value(prim, "rad:facility:equipmentId", "")
-                    ),
-                    "equipment_type": str(
-                        _attribute_value(prim, "rad:facility:equipmentType", "")
-                    ),
+                    "equipment_id": str(_attribute_value(prim, "rad:facility:equipmentId", "")),
+                    "equipment_type": str(_attribute_value(prim, "rad:facility:equipmentType", "")),
                     "room_id": str(room_id or ""),
                     "fixed": bool(_attribute_value(prim, "rad:facility:fixed", False)),
                 }
@@ -470,19 +482,11 @@ def _environment_audit(
             shields.append(
                 {
                     "path": path,
-                    "inventory_id": str(
-                        _attribute_value(prim, "rad:shield:inventoryId", "")
-                    ),
-                    "movable": bool(
-                        _attribute_value(prim, "rad:shield:movable", False)
-                    ),
+                    "inventory_id": str(_attribute_value(prim, "rad:shield:inventoryId", "")),
+                    "movable": bool(_attribute_value(prim, "rad:shield:movable", False)),
                     "staged": bool(_attribute_value(prim, "rad:shield:staged", False)),
-                    "deployed": bool(
-                        _attribute_value(prim, "rad:shield:deployed", False)
-                    ),
-                    "placement_fraction": _attribute_value(
-                        prim, "rad:shield:placementFraction"
-                    ),
+                    "deployed": bool(_attribute_value(prim, "rad:shield:deployed", False)),
+                    "placement_fraction": _attribute_value(prim, "rad:shield:placementFraction"),
                     "room_id": str(room_id or ""),
                 }
             )
@@ -507,26 +511,16 @@ def _environment_audit(
     except Exception as error:
         map_load_error = f"{type(error).__name__}: {error}"
 
-    candidate_cells = int(
-        _attribute_value(surface, "rad:source:candidateCellCount", 0)
-    )
+    candidate_cells = int(_attribute_value(surface, "rad:source:candidateCellCount", 0))
     active_cells = int(_attribute_value(surface, "rad:source:activeCellCount", 0))
     active_faces = int(_attribute_value(surface, "rad:source:activeFaceCount", 0))
     declared = {
         "layout_id": str(_attribute_value(facility, "rad:facility:layoutId", "")),
-        "deterministic": bool(
-            _attribute_value(facility, "rad:facility:deterministic", False)
-        ),
+        "deterministic": bool(_attribute_value(facility, "rad:facility:deterministic", False)),
         "room_count": int(_attribute_value(facility, "rad:facility:roomCount", 0)),
-        "corridor_count": int(
-            _attribute_value(facility, "rad:facility:corridorCount", 0)
-        ),
-        "equipment_count": int(
-            _attribute_value(facility, "rad:facility:equipmentCount", 0)
-        ),
-        "obstacle_count": int(
-            _attribute_value(facility, "rad:facility:obstacleCount", 0)
-        ),
+        "corridor_count": int(_attribute_value(facility, "rad:facility:corridorCount", 0)),
+        "equipment_count": int(_attribute_value(facility, "rad:facility:equipmentCount", 0)),
+        "obstacle_count": int(_attribute_value(facility, "rad:facility:obstacleCount", 0)),
         "reserved_route_ids": _usd_string_array(
             _attribute_value(facility, "rad:facility:reservedRouteIds", ())
         ),
@@ -540,24 +534,16 @@ def _environment_audit(
         "source_type": str(_attribute_value(surface, "rad:source:type", "")),
         "source_enabled": bool(_attribute_value(surface, "rad:source:enabled", False)),
         "decon_enabled": bool(_attribute_value(surface, "rad:decon:enabled", False)),
-        "irregular_mask": bool(
-            _attribute_value(surface, "rad:source:irregularMask", False)
-        ),
+        "irregular_mask": bool(_attribute_value(surface, "rad:source:irregularMask", False)),
         "candidate_cell_count": candidate_cells,
         "active_cell_count": active_cells,
         "active_face_count": active_faces,
         "mesh_face_count": face_count,
-        "deposition_model": str(
-            _attribute_value(surface, "rad:source:depositionModel", "")
-        ),
+        "deposition_model": str(_attribute_value(surface, "rad:source:depositionModel", "")),
         "geometry": str(_attribute_value(surface, "rad:source:geometry", "")),
-        "surface_orientation": str(
-            _attribute_value(surface, "rad:decon:surfaceOrientation", "")
-        ),
+        "surface_orientation": str(_attribute_value(surface, "rad:decon:surfaceOrientation", "")),
         "raster_rows": int(_attribute_value(surface, "rad:decon:rasterRows", 0)),
-        "collision_enabled": bool(
-            _attribute_value(surface, "physics:collisionEnabled", False)
-        ),
+        "collision_enabled": bool(_attribute_value(surface, "physics:collisionEnabled", False)),
         "source_activity_map_uri": source_map_uri,
         "decon_activity_map_uri": decon_map_uri,
         "requested_activity_map_uri": str(activity_path.resolve()),
@@ -575,12 +561,8 @@ def _environment_audit(
     invariants = {
         "facility_root_exists": bool(facility and facility.IsValid()),
         "deterministic_facility": declared["deterministic"],
-        "at_least_four_rooms": (
-            declared["room_count"] >= 4 and discovered["room_count"] >= 4
-        ),
-        "room_declaration_matches_stage": (
-            declared["room_count"] == discovered["room_count"]
-        ),
+        "at_least_four_rooms": (declared["room_count"] >= 4 and discovered["room_count"] >= 4),
+        "room_declaration_matches_stage": (declared["room_count"] == discovered["room_count"]),
         "at_least_three_corridors": (
             declared["corridor_count"] >= 3 and discovered["corridor_count"] >= 3
         ),
@@ -601,9 +583,7 @@ def _environment_audit(
             "/World/LeadShield",
             "/World/StagingLeadShield",
         }.issubset({row["path"] for row in shields}),
-        "surface_source_and_decon_enabled": (
-            source["source_enabled"] and source["decon_enabled"]
-        ),
+        "surface_source_and_decon_enabled": (source["source_enabled"] and source["decon_enabled"]),
         "surface_is_irregular_dense_geometry": (
             source["irregular_mask"]
             and candidate_cells >= 48 * 28
@@ -613,12 +593,10 @@ def _environment_audit(
             and source["geometry"] == "irregular_masked_triangle_activity_map"
         ),
         "surface_is_six_lane_vertical_raster": (
-            source["surface_orientation"] == "vertical_x"
-            and source["raster_rows"] == 6
+            source["surface_orientation"] == "vertical_x" and source["raster_rows"] == 6
         ),
         "visible_collision_activity_geometry_is_identical": (
-            declared["decon_surface_geometry"]
-            == "same_visible_irregular_collision_activity_mesh"
+            declared["decon_surface_geometry"] == "same_visible_irregular_collision_activity_mesh"
             and source["collision_enabled"]
             and active_faces == 2 * active_cells
             and active_faces == face_count
@@ -669,11 +647,7 @@ def _complex_process_audit(
 
     plan = _jsonable(plan_payload)
     results = [dict(_jsonable(row)) for row in raw_results]
-    plan_steps = [
-        dict(step)
-        for step in plan.get("steps", [])
-        if isinstance(step, Mapping)
-    ]
+    plan_steps = [dict(step) for step in plan.get("steps", []) if isinstance(step, Mapping)]
 
     def action_rows(action_type: str) -> list[tuple[int, dict[str, Any]]]:
         return [
@@ -688,16 +662,13 @@ def _complex_process_audit(
     protected_moves = [
         (index, row)
         for index, row in action_rows("measure")
-        if str(
-            dict(row.get("public_details", {})).get("detector_path", "")
-        )
+        if str(dict(row.get("public_details", {})).get("detector_path", ""))
         == expected_protected_path
     ]
     measurement_rows = [
         (index, row)
         for index, row in enumerate(results)
-        if _enum_tail(row.get("command", "")) == "measure"
-        and "action_type" not in row
+        if _enum_tail(row.get("command", "")) == "measure" and "action_type" not in row
     ]
     return_rows = [
         (index, row)
@@ -729,19 +700,10 @@ def _complex_process_audit(
     final_completion = completion_rows[-1] if completion_rows else {}
     final_decon_attempt = int(decon_rows[-1][1].get("attempt", 0)) if decon_rows else 0
 
-    decon_public_details = [
-        dict(row.get("public_details", {})) for _, row in decon_rows
-    ]
-    decon_motion = [
-        dict(details.get("motion_audit", {}))
-        for details in decon_public_details
-    ]
-    activity_before_values = [
-        float(row.get("activity_before_bq", 0.0)) for row in decon_motion
-    ]
-    activity_after_values = [
-        float(row.get("activity_after_bq", 0.0)) for row in decon_motion
-    ]
+    decon_public_details = [dict(row.get("public_details", {})) for _, row in decon_rows]
+    decon_motion = [dict(details.get("motion_audit", {})) for details in decon_public_details]
+    activity_before_values = [float(row.get("activity_before_bq", 0.0)) for row in decon_motion]
+    activity_after_values = [float(row.get("activity_after_bq", 0.0)) for row in decon_motion]
 
     shield_events: list[tuple[int, dict[str, Any], str]] = []
     for index, row in (*place_rows, *move_rows):
@@ -762,16 +724,11 @@ def _complex_process_audit(
             if isinstance(collateral, Mapping):
                 collateral_rows.append(dict(collateral))
     maximum_collateral_displacement_m = max(
-        (
-            float(row.get("displacement_m", float("inf")))
-            for row in collateral_rows
-        ),
+        (float(row.get("displacement_m", float("inf"))) for row in collateral_rows),
         default=0.0,
     )
 
-    place_details = (
-        dict(place_rows[0][1].get("public_details", {})) if place_rows else {}
-    )
+    place_details = dict(place_rows[0][1].get("public_details", {})) if place_rows else {}
     move_details = dict(move_rows[0][1].get("public_details", {})) if move_rows else {}
     place_motion = dict(place_details.get("motion_audit", {}))
     move_motion = dict(move_details.get("motion_audit", {}))
@@ -780,9 +737,7 @@ def _complex_process_audit(
         if protected_moves
         else {}
     )
-    protected_motion = (
-        dict(protected_motion) if isinstance(protected_motion, Mapping) else {}
-    )
+    protected_motion = dict(protected_motion) if isinstance(protected_motion, Mapping) else {}
     measurement = measurement_rows[0][1] if measurement_rows else {}
     return_result = return_rows[0][1] if return_rows else {}
     return_details = return_result.get("public_details", {})
@@ -833,9 +788,7 @@ def _complex_process_audit(
     ]
     result_rows_by_workflow_step = {
         step_number: [
-            row
-            for row in results
-            if int(row.get("workflow_step", 0) or 0) == step_number
+            row for row in results if int(row.get("workflow_step", 0) or 0) == step_number
         ]
         for step_number in range(1, len(plan_steps) + 1)
     }
@@ -910,8 +863,7 @@ def _complex_process_audit(
                 for details in decon_public_details
             )
             and all(
-                float(details.get("accepted_contacts", 0)) > 0
-                for details in decon_public_details
+                float(details.get("accepted_contacts", 0)) > 0 for details in decon_public_details
             )
             and all(bool(motion.get("success", False)) for motion in decon_motion)
             and all(float(motion.get("coverage_fraction", 0.0)) >= 0.35 for motion in decon_motion)
@@ -920,17 +872,11 @@ def _complex_process_audit(
             bool(activity_before_values)
             and all(
                 after < before
-                for before, after in zip(
-                    activity_before_values, activity_after_values, strict=True
-                )
+                for before, after in zip(activity_before_values, activity_after_values, strict=True)
             )
             and activity_after_values[-1] < activity_before_values[0]
-            and float(
-                environment_after.get("surface_source", {}).get("map_activity_bq", 0.0)
-            )
-            < float(
-                environment_before.get("surface_source", {}).get("map_activity_bq", 0.0)
-            )
+            and float(environment_after.get("surface_source", {}).get("map_activity_bq", 0.0))
+            < float(environment_before.get("surface_source", {}).get("map_activity_bq", 0.0))
         ),
         "same_primary_shield_placed_at_25_then_moved_to_65": (
             bool(place_rows)
@@ -946,16 +892,12 @@ def _complex_process_audit(
             and abs(float(place_details.get("placement_fraction", -1.0)) - 0.25) <= 1.0e-6
             and abs(float(move_details.get("placement_fraction", -1.0)) - 0.65) <= 1.0e-6
             and shield_events[:2]
-            and [event[2] for event in shield_events[:2]]
-            == ["place_shield", "move_shield"]
+            and [event[2] for event in shield_events[:2]] == ["place_shield", "move_shield"]
         ),
         "primary_shield_final_metadata_is_65_percent": (
             bool(final_primary_shield)
             and bool(final_primary_shield.get("deployed", False))
-            and abs(
-                float(final_primary_shield.get("placement_fraction", -1.0)) - 0.65
-            )
-            <= 1.0e-6
+            and abs(float(final_primary_shield.get("placement_fraction", -1.0)) - 0.65) <= 1.0e-6
             and shield_displacement_m > 0.25
         ),
         "protected_navigation_completed": (
@@ -1028,9 +970,7 @@ def _complex_process_audit(
                 "action_type": action_type,
                 "action_id": row.get("action_id"),
                 "object_path": dict(row.get("public_details", {})).get("object_path"),
-                "placement_fraction": dict(row.get("public_details", {})).get(
-                    "placement_fraction"
-                ),
+                "placement_fraction": dict(row.get("public_details", {})).get("placement_fraction"),
             }
             for index, row, action_type in shield_events
         ],
@@ -1061,9 +1001,7 @@ def _local_llm_audit(dashboard: Any) -> dict[str, Any]:
         "runtime_class": type(runtime).__name__ if runtime is not None else None,
         "runtime_status": runtime_status,
         "runtime_process_pid": getattr(process, "pid", None),
-        "interpreter_class": (
-            type(interpreter).__name__ if interpreter is not None else None
-        ),
+        "interpreter_class": (type(interpreter).__name__ if interpreter is not None else None),
         "model": getattr(interpreter, "model", None),
         "endpoint": endpoint,
         "endpoint_host": None if parsed is None else parsed.hostname,
@@ -1079,9 +1017,7 @@ def _local_llm_audit(dashboard: Any) -> dict[str, Any]:
         "qwen_model_alias_was_used": audit["model"] == "radcounter-qwen3-4b",
     }
     audit["invariants"] = invariants
-    audit["failed_invariants"] = [
-        name for name, passed in invariants.items() if not passed
-    ]
+    audit["failed_invariants"] = [name for name, passed in invariants.items() if not passed]
     return audit
 
 
@@ -1099,18 +1035,12 @@ def _capture_viewport_evidence(app: Any, path: Path) -> dict[str, Any]:
     deadline = time.monotonic() + 15.0
     while time.monotonic() < deadline and app.is_running():
         app.update()
-        if (
-            path.is_file()
-            and path.stat().st_size > 0
-            and path.stat().st_mtime_ns >= started_ns
-        ):
+        if path.is_file() and path.stat().st_size > 0 and path.stat().st_mtime_ns >= started_ns:
             break
     return {
         "path": str(path.resolve()),
         "captured": (
-            path.is_file()
-            and path.stat().st_size > 0
-            and path.stat().st_mtime_ns >= started_ns
+            path.is_file() and path.stat().st_size > 0 and path.stat().st_mtime_ns >= started_ns
         ),
         "bytes": path.stat().st_size if path.is_file() else 0,
         "modified_ns": path.stat().st_mtime_ns if path.is_file() else None,
@@ -1157,9 +1087,7 @@ def _run_complex_natural_language_validation(
         "measurement_robot_initial_position_m": _world_position(
             stage, robot_config.measurement_articulation
         ).tolist(),
-        "primary_shield_initial_position_m": _world_position(
-            stage, "/World/LeadShield"
-        ).tolist(),
+        "primary_shield_initial_position_m": _world_position(stage, "/World/LeadShield").tolist(),
     }
     context_before = dashboard.natural_language_context()
     context_payload = context_before.model_dump(mode="json")
@@ -1185,13 +1113,10 @@ def _run_complex_natural_language_validation(
             "public_context_before": context_payload,
             "screenshots": {"initial": initial_screenshot},
             "failed_invariants": [
-                f"environment_before.{name}"
-                for name in environment_before["failed_invariants"]
+                f"environment_before.{name}" for name in environment_before["failed_invariants"]
             ],
         }
-        raise ComplexNaturalLanguageValidationError(
-            "complex facility preflight failed", payload
-        )
+        raise ComplexNaturalLanguageValidationError("complex facility preflight failed", payload)
 
     physical_queue_dispatches: list[dict[str, Any]] = []
 
@@ -1227,13 +1152,9 @@ def _run_complex_natural_language_validation(
             timeout_s=args.natural_language_timeout_s,
         )
         plan_payload = interpreted.validated.plan.model_dump(mode="json")
-        context_by_id = {
-            action.action_id: action for action in context_before.available_actions
-        }
+        context_by_id = {action.action_id: action for action in context_before.available_actions}
         planned_steps = list(interpreted.validated.plan.steps)
-        planned_actions = [
-            context_by_id.get(step.candidate_id or "") for step in planned_steps
-        ]
+        planned_actions = [context_by_id.get(step.candidate_id or "") for step in planned_steps]
         expected_commands = (
             "execute_candidate",
             "execute_candidate",
@@ -1246,8 +1167,7 @@ def _run_complex_natural_language_validation(
         preflight_invariants = {
             "seven_ordered_logical_steps": (
                 len(planned_steps) == len(expected_commands)
-                and tuple(_enum_tail(step.command) for step in planned_steps)
-                == expected_commands
+                and tuple(_enum_tail(step.command) for step in planned_steps) == expected_commands
             ),
             "bounded_decontamination_is_first": (
                 len(planned_actions) >= 1
@@ -1279,12 +1199,10 @@ def _run_complex_natural_language_validation(
                 len(planned_actions) >= 4
                 and planned_actions[3] is not None
                 and planned_actions[3].action_type == "measure"
-                and planned_actions[3].target
-                == "/World/DetectorStations/Protected"
+                and planned_actions[3].target == "/World/DetectorStations/Protected"
             ),
             "physical_plan_is_waiting_for_confirmation": (
-                interpreted.validated.requires_confirmation
-                and not interpreted.executed
+                interpreted.validated.requires_confirmation and not interpreted.executed
             ),
         }
         plan_preflight = {
@@ -1297,9 +1215,7 @@ def _run_complex_natural_language_validation(
                     **action.model_dump(mode="json"),
                     "feasibility_facts": _jsonable(
                         getattr(
-                            getattr(dashboard, "_command_candidates", {}).get(
-                                action.action_id
-                            ),
+                            getattr(dashboard, "_command_candidates", {}).get(action.action_id),
                             "feasibility",
                             None,
                         )
@@ -1311,8 +1227,7 @@ def _run_complex_natural_language_validation(
         }
         if plan_preflight["failed_invariants"]:
             raise RuntimeError(
-                "natural-language plan preflight failed: "
-                f"{plan_preflight['failed_invariants']}"
+                f"natural-language plan preflight failed: {plan_preflight['failed_invariants']}"
             )
         panel.update(
             "Plan verified; executing explicit confirmation through the physical queue",
@@ -1394,9 +1309,7 @@ def _run_complex_natural_language_validation(
             "measurement_robot_home_position_m": _jsonable(
                 getattr(measurement_controller, "home_position_m", None)
             ),
-            "primary_shield_final_position_m": _world_position(
-                stage, "/World/LeadShield"
-            ).tolist(),
+            "primary_shield_final_position_m": _world_position(stage, "/World/LeadShield").tolist(),
         }
     )
     process_audit = _complex_process_audit(
@@ -1412,29 +1325,21 @@ def _run_complex_natural_language_validation(
     physical_result_count = sum(
         1
         for row in results
-        if _enum_tail(row.get("command", ""))
-        in {"execute_candidate", "return_measurement_robot"}
+        if _enum_tail(row.get("command", "")) in {"execute_candidate", "return_measurement_robot"}
     )
     runner_invariants = {
         "visible_gui_mode_was_enforced": not args.headless,
         "fresh_initial_and_final_viewport_evidence": (
-            bool(initial_screenshot.get("captured"))
-            and bool(final_screenshot.get("captured"))
+            bool(initial_screenshot.get("captured")) and bool(final_screenshot.get("captured"))
         ),
-        "physical_plan_required_confirmation": bool(
-            submission.validated.requires_confirmation
-        ),
+        "physical_plan_required_confirmation": bool(submission.validated.requires_confirmation),
         "confirmed_plan_executed": bool(submission.executed),
         "physical_actions_used_dashboard_queue": (
             bool(physical_queue_dispatches)
             and len(physical_queue_dispatches) == physical_result_count
+            and any(row["command"] == "execute_candidate" for row in physical_queue_dispatches)
             and any(
-                row["command"] == "execute_candidate"
-                for row in physical_queue_dispatches
-            )
-            and any(
-                row["command"] == "return_measurement_robot"
-                for row in physical_queue_dispatches
+                row["command"] == "return_measurement_robot" for row in physical_queue_dispatches
             )
         ),
         "actual_loopback_local_llm_used": not local_llm["failed_invariants"],
@@ -1477,9 +1382,7 @@ def _run_complex_natural_language_validation(
         "controller_audit": {
             "countermeasure_dof_count": len(countermeasure_controller.dof_names),
             "measurement_dof_count": len(measurement_controller.robot.dof_names),
-            "franka_arm_joint_excursion_rad": (
-                countermeasure_controller.arm_joint_excursion_rad
-            ),
+            "franka_arm_joint_excursion_rad": (countermeasure_controller.arm_joint_excursion_rad),
         },
     }
     panel.update(
@@ -1566,7 +1469,7 @@ def _run_validation(
     dashboard: Any,
 ) -> dict:
     selection = _selected_system(args)
-    if selection.configurable:
+    if selection.configurable and not args.decontamination_smoke_test:
         return _run_configurable_system(app, args, panel, dashboard, selection)
 
     import omni.usd
@@ -1600,17 +1503,43 @@ def _run_validation(
     for _ in range(20):
         app.update()
     context = omni.usd.get_context()
-    stage_path = ROOT / "assets/environments/radcounter_vertical_slice.usda"
+    environment_manifest = None
+    if args.decontamination_smoke_test:
+        from radcounter.isaac.system_profile import prepare_environment_stage
+
+        environment_operation_offset_m = selection.environment_config.translation_world_m
+        stage_path, environment_manifest = prepare_environment_stage(selection)
+    else:
+        environment_operation_offset_m = None
+        stage_path = ROOT / "assets/environments/radcounter_vertical_slice.usda"
     if not context.open_stage(str(stage_path)):
         raise RuntimeError(f"failed to open {stage_path}")
     for _ in range(24):
         app.update()
     stage = context.get_stage()
-    robot_config = replace(
-        RealRobotAssetConfig(),
-        decon_workbench_center_m=(14.39, 0.80, 1.15),
-        shield_initial_position_m=(4.80, 2.80, 0.0),
-    )
+    if args.decontamination_smoke_test:
+        decon_anchor = selection.spawn_anchor("decon-surface")
+        ground_primary = selection.spawn_anchor("ground-primary")
+        ground_secondary = selection.spawn_anchor("ground-secondary")
+        camera_eye = selection.spawn_anchor("inspection-camera-eye")
+        camera_target = selection.spawn_anchor("inspection-camera-target")
+        robot_config = replace(
+            RealRobotAssetConfig(),
+            decon_workbench_center_m=decon_anchor.translation_m,
+            shield_initial_position_m=(0.0, 3.0, ground_primary.translation_m[2]),
+            include_validation_facility=False,
+        )
+    else:
+        decon_anchor = None
+        ground_primary = None
+        ground_secondary = None
+        camera_eye = None
+        camera_target = None
+        robot_config = replace(
+            RealRobotAssetConfig(),
+            decon_workbench_center_m=(14.39, 0.80, 1.15),
+            shield_initial_position_m=(4.80, 2.80, 0.0),
+        )
     asset_manifest = add_real_robot_references(stage, config=robot_config)
     panel.update("Loading articulated robot assets", 0, 8, asset_manifest)
     for _ in range(120):
@@ -1621,7 +1550,22 @@ def _run_validation(
     )
     floor_activity_before = _activity_total(activity_path)
     author_real_robot_task_scene(stage, activity_path, config=robot_config)
-    _configure_camera(stage)
+    if args.decontamination_smoke_test:
+        # This run selects only contact decontamination. Do not leave an
+        # unrelated movable validation shield in the imported CAD where its
+        # settling motion could be mistaken for task collateral.
+        shield = stage.GetPrimAtPath(robot_config.shield_path)
+        if shield.IsValid():
+            stage.RemovePrim(robot_config.shield_path)
+    if args.decontamination_smoke_test:
+        assert camera_eye is not None and camera_target is not None
+        _configure_decon_room_camera(
+            stage,
+            eye_m=camera_eye.translation_m,
+            target_m=camera_target.translation_m,
+        )
+    else:
+        _configure_camera(stage)
     for _ in range(60):
         app.update()
 
@@ -1644,8 +1588,19 @@ def _run_validation(
         )
     )
     world.reset()
+    spawn_pose_before_settle = _world_position(stage, robot_config.panda_base_path)
     for _ in range(90):
         world.step(render=False)
+    spawn_pose_after_settle = _world_position(stage, robot_config.panda_base_path)
+    spawn_vertical_drop_m = max(
+        0.0,
+        float(spawn_pose_before_settle[2] - spawn_pose_after_settle[2]),
+    )
+    if args.decontamination_smoke_test and spawn_vertical_drop_m > 0.15:
+        raise RuntimeError(
+            "catalog robot spawn is unsupported by the selected CAD floor: "
+            f"vertical drop={spawn_vertical_drop_m:.3f} m"
+        )
     stepper = _GuiStepper(app, args.frame_delay_s, world)
     countermeasure_controller = RidgebackFrankaController(
         stage,
@@ -1659,11 +1614,23 @@ def _run_validation(
         config=robot_config,
         articulation=carter_articulation,
     )
-    measurement_controller.set_initial_pose((-4.1, -2.5, 0.0))
-    staging = countermeasure_controller.navigate_route(
-        ((0.0, -1.00, 0.0), (1.20, -1.00, 0.0)),
-        final_yaw_rad=0.0,
-    )
+    if args.decontamination_smoke_test:
+        assert ground_primary is not None and ground_secondary is not None
+        measurement_controller.set_initial_pose(ground_secondary.translation_m)
+        surface_x, surface_y, _ = robot_config.decon_workbench_center_m
+        staging = countermeasure_controller.navigate_route(
+            (
+                ground_primary.translation_m,
+                (surface_x - 0.98, surface_y - 0.55, ground_primary.translation_m[2]),
+            ),
+            final_yaw_rad=0.0,
+        )
+    else:
+        measurement_controller.set_initial_pose((-4.1, -2.5, 0.0))
+        staging = countermeasure_controller.navigate_route(
+            ((0.0, -1.00, 0.0), (1.20, -1.00, 0.0)),
+            final_yaw_rad=0.0,
+        )
     if not staging.success:
         raise RuntimeError(f"countermeasure staging motion failed: {staging.message}")
     if args.interactive:
@@ -1689,6 +1656,9 @@ def _run_validation(
         object_end_effector_offset_m=(0.90, 0.0, 0.0),
         manipulator_workspace_m=0.95,
         mobile_clearance_m=0.55,
+        ignored_collision_paths=(
+            ("/World/Environment",) if args.decontamination_smoke_test else ()
+        ),
     )
     generator = IsaacActionCandidateGenerator(
         stage,
@@ -1747,7 +1717,114 @@ def _run_validation(
     )
     checker = DeterministicFeasibilityChecker()
     _complete(services.initialize())
+    dashboard.configure_system_paths(
+        stage_path=stage_path,
+        config_path=ROOT / "configs/scenarios/vertical_slice.runtime.json",
+        display_name=selection.profile.display_name,
+        simulation=simulation,
+        selection=selection,
+    )
     dashboard.bind_workflow(services, belief)
+
+    if args.decontamination_smoke_test:
+        candidates = generator.generate_decon_actions(belief)
+        if not candidates:
+            raise RuntimeError("the selected environment generated no decontamination action")
+        candidate = candidates[0]
+        feasibility = checker.evaluate(candidate, resources)
+        if not feasibility.feasible:
+            raise RuntimeError(
+                "decontamination action is infeasible in the selected environment: "
+                f"{feasibility.reasons}; facts={_jsonable(candidate.feasibility)}"
+            )
+        action = replace(
+            candidate.action,
+            predicted_duration_s=args.decon_duration_s,
+            parameters={
+                **candidate.action.parameters,
+                "duration_s": args.decon_duration_s,
+                "decon_media": args.decon_duration_s,
+            },
+        )
+        activity_before = _activity_total(activity_path)
+        robot_before = _world_position(stage, robot_config.countermeasure_root)
+        panel.update(
+            "Executing Fukushima articulated contact decontamination",
+            0,
+            1,
+            _jsonable(candidate.feasibility),
+        )
+        result = _complete(services.execute(action))
+        activity_after = _activity_total(activity_path)
+        robot_after = _world_position(stage, robot_config.countermeasure_root)
+        public_details = dict(result.public_details)
+        motion = dict(public_details.get("motion_audit", {}))
+        accepted_contacts = int(public_details.get("accepted_contacts", 0))
+        coverage_fraction = float(motion.get("coverage_fraction", 0.0))
+        invariants = {
+            "articulated_action_completed": result.status == ActionStatus.COMPLETED,
+            "visible_irregular_surface_reduced": activity_after < activity_before,
+            "verified_contacts_recorded": accepted_contacts > 0,
+            "meaningful_surface_coverage": coverage_fraction >= 0.35,
+            "franka_arm_moved": countermeasure_controller.arm_joint_excursion_rad > 0.2,
+            "fukushima_geometry_in_transport": len(simulation.transport.geometry_paths) >= 995,
+            "catalog_spawn_stayed_supported": spawn_vertical_drop_m <= 0.15,
+            "separate_validation_facility_absent": not stage.GetPrimAtPath(
+                "/World/RemoteDeconFacility"
+            ).IsValid(),
+        }
+        failed = [name for name, passed in invariants.items() if not passed]
+        payload = {
+            "success": not failed,
+            "mode": "fukushima_decontamination_smoke_test",
+            "selection": selection.as_dict(),
+            "stage": str(stage_path),
+            "environment_manifest": (
+                None if environment_manifest is None else str(environment_manifest)
+            ),
+            "environment_operation_offset_m": environment_operation_offset_m,
+            "spawn_anchors": {
+                "countermeasure": "ground-primary",
+                "measurement": "ground-secondary",
+                "decontamination_surface": "decon-surface",
+            },
+            "spawn_vertical_drop_m": spawn_vertical_drop_m,
+            "robot_model": "Clearpath Ridgeback + Franka Panda",
+            "surface_path": robot_config.decon_surface_path,
+            "activity_before_bq": activity_before,
+            "activity_after_bq": activity_after,
+            "removed_fraction": (
+                (activity_before - activity_after) / activity_before
+                if activity_before > 0.0
+                else 0.0
+            ),
+            "accepted_contacts": accepted_contacts,
+            "coverage_fraction": coverage_fraction,
+            "robot_displacement_m": float(np.linalg.norm(robot_after - robot_before)),
+            "arm_joint_excursion_rad": countermeasure_controller.arm_joint_excursion_rad,
+            "transport_geometries": len(simulation.transport.geometry_paths),
+            "result": _jsonable(result.public_view()),
+            "invariants": invariants,
+            "failed_invariants": failed,
+        }
+        dashboard.set_workflow_view(services.workflow_view())
+        assert camera_eye is not None and camera_target is not None
+        _configure_decon_room_camera(
+            stage,
+            eye_m=camera_eye.translation_m,
+            target_m=camera_target.translation_m,
+        )
+        panel.update(
+            "Completed Fukushima articulated contact decontamination",
+            1,
+            1,
+            payload,
+        )
+        if failed:
+            raise DecontaminationSmokeValidationError(
+                f"Fukushima decontamination invariants failed: {failed}", payload
+            )
+        return payload
 
     if args.complex_natural_language_validation:
         return _run_complex_natural_language_validation(
@@ -1912,9 +1989,7 @@ def _run_validation(
         generator.probe.invalidate_collision_cache()
         live_candidates = generator.generate_measurement_actions(belief)
         candidate = next(
-            item
-            for item in live_candidates
-            if item.action.target_prim_path == station_path
+            item for item in live_candidates if item.action.target_prim_path == station_path
         )
         report = checker.evaluate(candidate, resources)
         if not report.feasible:
@@ -2202,7 +2277,10 @@ def main(argv: list[str] | None = None) -> int:
         exit_code = 1
         preserved = (
             dict(error.audit)
-            if isinstance(error, ComplexNaturalLanguageValidationError)
+            if isinstance(
+                error,
+                (ComplexNaturalLanguageValidationError, DecontaminationSmokeValidationError),
+            )
             else {}
         )
         payload = {
@@ -2221,9 +2299,7 @@ def main(argv: list[str] | None = None) -> int:
         total = 7 if args.complex_natural_language_validation else 8
         disposition = "remains open for inspection" if args.keep_open else "will close"
         panel.update(
-            f"PASS - GUI {disposition}"
-            if exit_code == 0
-            else f"FAIL - GUI {disposition}",
+            f"PASS - GUI {disposition}" if exit_code == 0 else f"FAIL - GUI {disposition}",
             total if exit_code == 0 else 0,
             total,
             payload,

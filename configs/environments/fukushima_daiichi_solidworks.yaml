@@ -5,11 +5,15 @@ environment:
   format: usd
   coordinate_system:
     units: auto
-    up_axis: +Z
+    # The SolidWorks-exported USD declares Y-up; let the importer read and
+    # normalize that metadata instead of relabelling the geometry as Z-up.
+    up_axis: auto
     forward_axis: +X
     handedness: right
   scale: 1.0
-  translation_world_m: [0.0, 0.0, 0.0]
+  # Put the authored -18 m lower operating floor at simulator Z=0 and keep
+  # the open CAD cut face next to the catalog's robot/work-surface anchors.
+  translation_world_m: [2.2, 0.0, 18.0]
   rotation_world_rpy_deg: [0.0, 0.0, 0.0]
   default_material_id: steel
   material_rules:

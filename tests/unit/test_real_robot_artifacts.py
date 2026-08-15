@@ -61,8 +61,7 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     assert "IsaacPhysicsRobotController" not in source
 
     controller = (
-        root
-        / "source/extensions/radcounter.isaac/radcounter/isaac/robot/real_robots.py"
+        root / "source/extensions/radcounter.isaac/radcounter/isaac/robot/real_robots.py"
     ).read_text(encoding="utf-8")
     assert "_author_remote_decon_facility" in controller
     assert "CorridorNorthWall" in controller
@@ -89,7 +88,7 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     assert controller.count("self.set_gripper(0.016)") == 2
     assert "shield_grasp_offset_m: tuple[float, float, float] = (-0.24, 0.0, 0.59)" in controller
     assert "handle_outer_x = cfg.shield_grasp_offset_m[0] - 0.04" in controller
-    assert '(0.0, -0.50, 0.25)' in controller
+    assert "(0.0, -0.50, 0.25)" in controller
     assert 'object_path + "/ManipulatorHandleStem"' in controller
     assert '"lift_clearance"' in controller
     assert '"lift_transport"' in controller
@@ -101,9 +100,7 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     restore_index = controller.index("self._restore_grasp_collisions()", retract_index)
     assert release_index < retract_index < restore_index
 
-    rules = (root / "docs/decontamination-authoring-rules.md").read_text(
-        encoding="utf-8"
-    )
+    rules = (root / "docs/decontamination-authoring-rules.md").read_text(encoding="utf-8")
     assert "Gaussian lobes plus correlated sinusoidal roughness" in rules
     assert "continuous boustrophedon/serpentine raster" in rules
     assert "Sample the full physical pad footprint densely enough" in rules
@@ -111,41 +108,33 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     assert "np.linspace(-0.085, 0.085, 9)" in source
 
     contact_model = (
-        root
-        / "source/extensions/radcounter.isaac/radcounter/isaac/robot/decontamination.py"
+        root / "source/extensions/radcounter.isaac/radcounter/isaac/robot/decontamination.py"
     ).read_text(encoding="utf-8")
     assert "effective_contact_exposure_s" in contact_model
     assert "def _update_surface_visuals" in contact_model
     assert "opacity_attr.Set([0.0 if value < 0.10" in contact_model
     assert "count / footprint_count" not in contact_model
-    assert "implementation, regression tests" in (
-        root / "AGENTS.md"
-    ).read_text(encoding="utf-8")
+    assert "implementation, regression tests" in (root / "AGENTS.md").read_text(encoding="utf-8")
 
     workflow = (
-        root
-        / "source/extensions/radcounter.isaac/radcounter/isaac/workflow/services.py"
+        root / "source/extensions/radcounter.isaac/radcounter/isaac/workflow/services.py"
     ).read_text(encoding="utf-8")
     assert '"motion_audit": _motion_audit(report)' in workflow
     assert "collateral_motion_audit" in workflow
     assert '"pickup_base_route_m"' in (
-        root
-        / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
+        root / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
     ).read_text(encoding="utf-8")
     assert '"base_route_m"' in (
-        root
-        / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
+        root / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
     ).read_text(encoding="utf-8")
     assert "carried_object_path" in (
-        root
-        / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
+        root / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
     ).read_text(encoding="utf-8")
     assert "live_candidates = generator.generate_measurement_actions(belief)" in source
     assert "generator.probe.invalidate_collision_cache()" in source
     assert "object_end_effector_offset_m=(0.90, 0.0, 0.0)" in source
     planner_source = (
-        root
-        / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
+        root / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
     ).read_text(encoding="utf-8")
     assert "removal_pickup_yaw = math.pi" in planner_source
     assert "removal_grasp = removal_root + grasp_from_root" in planner_source
@@ -176,15 +165,19 @@ def test_complex_decommissioning_facility_manifest_is_deterministic_and_clear() 
     assert len(layout.corridors) >= 3
     connected = {"original_cell"}
     while True:
-        expanded = connected | {
-            corridor.to_room_id
-            for corridor in layout.corridors
-            if corridor.from_room_id in connected
-        } | {
-            corridor.from_room_id
-            for corridor in layout.corridors
-            if corridor.to_room_id in connected
-        }
+        expanded = (
+            connected
+            | {
+                corridor.to_room_id
+                for corridor in layout.corridors
+                if corridor.from_room_id in connected
+            }
+            | {
+                corridor.from_room_id
+                for corridor in layout.corridors
+                if corridor.to_room_id in connected
+            }
+        )
         if expanded == connected:
             break
         connected = expanded
@@ -217,9 +210,7 @@ def test_complex_decommissioning_facility_manifest_is_deterministic_and_clear() 
         (config.decon_workbench_center_m[0] - 0.90, config.decon_workbench_center_m[1]),
     )
 
-    staging_room = next(
-        room for room in layout.rooms if room.room_id == "shield_staging_room"
-    )
+    staging_room = next(room for room in layout.rooms if room.room_id == "shield_staging_room")
     shield_position = np.asarray(layout.secondary_shield_position_m)
     room_lower = np.asarray(staging_room.center_m) - np.asarray(staging_room.half_extent_m)
     room_upper = np.asarray(staging_room.center_m) + np.asarray(staging_room.half_extent_m)
@@ -277,8 +268,7 @@ def test_primary_shield_25_and_65_routes_use_the_west_handle_service_side() -> N
 
 def test_complex_facility_authoring_declares_auditable_metadata() -> None:
     source = (
-        ROOT
-        / "source/extensions/radcounter.isaac/radcounter/isaac/robot/real_robots.py"
+        ROOT / "source/extensions/radcounter.isaac/radcounter/isaac/robot/real_robots.py"
     ).read_text(encoding="utf-8")
 
     for attribute_name in (
@@ -297,11 +287,14 @@ def test_complex_facility_authoring_declares_auditable_metadata() -> None:
     assert source.count("half_scale=(0.18, 0.30, 0.035)") >= 2
     assert '"rad:shield:inventoryId"' in source
     assert '"staging-shield-02"' in source
-    assert "facility_layout = _author_remote_decon_facility(stage)" in source
+    assert "if cfg.include_validation_facility else None" in source
+    assert '"/World/RemoteDeconFacility"' in source
+    assert '"/World/DetectorStations/RemoteDeconRoom"' in source
+    assert "if legacy_surface.IsValid():" in source
+    assert "Optional relocation/disposal" in source
 
     planner_source = (
-        ROOT
-        / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
+        ROOT / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
     ).read_text(encoding="utf-8")
     assert "for placement_yaw in (0.0,):" in planner_source
     assert "overlaps the chassis and payload at release" in planner_source
@@ -373,6 +366,38 @@ def test_manipulation_base_endpoint_cannot_overlap_unrelated_prop() -> None:
         np.asarray((3.895, -0.26, 0.015)),
         excluded_paths=("/World/LeadShield",),
     )
+
+
+def test_curated_cad_spawn_can_ignore_only_the_compound_environment_aabb() -> None:
+    from radcounter.isaac.planning.scene_candidates import IsaacSceneFeasibilityProbe
+
+    probe = object.__new__(IsaacSceneFeasibilityProbe)
+    probe.config = SimpleNamespace(
+        countermeasure_robot_path="/World/CountermeasureRobot",
+        measurement_robot_path="/World/MeasurementRobot",
+        mobile_clearance_m=0.55,
+        ignored_collision_paths=("/World/Environment",),
+    )
+    probe._collision_bounds = lambda: (  # type: ignore[method-assign]
+        (
+            "/World/Environment/Building/Mesh",
+            np.asarray((-25.0, -25.0, -2.0)),
+            np.asarray((2.2, 25.0, 58.0)),
+        ),
+    )
+    probe.bounds = lambda path: None  # type: ignore[method-assign]
+
+    start = np.asarray((0.0, -1.0, 0.0))
+    target = np.asarray((1.2, -0.55, 0.0))
+    route = probe.plan_mobile_route(
+        start,
+        target,
+        moving_robot_path="/World/CountermeasureRobot",
+    )
+
+    assert route is not None
+    assert np.allclose(route[-1], target)
+    assert probe.mobile_base_pose_available(target)
 
 
 def test_measurement_route_treats_countermeasure_robot_as_obstacle() -> None:

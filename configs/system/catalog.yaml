@@ -6,6 +6,26 @@ environments:
     display_name: RadCounterSim vertical slice
     descriptor_uri: ../environments/vertical_slice_import.yaml
     description: Canonical four-room decommissioning and validation environment.
+    spawn_anchors:
+      ground-primary:
+        kind: ground_robot
+        translation_m: [0.0, -1.0, 0.0]
+        description: Supported starting pose in the original validation cell.
+      ground-secondary:
+        kind: ground_robot
+        translation_m: [-4.1, -2.5, 0.0]
+      aerial-primary:
+        kind: aerial_robot
+        translation_m: [2.0, 1.0, 1.5]
+      decon-surface:
+        kind: work_surface
+        translation_m: [14.39, 0.80, 1.15]
+      inspection-camera-eye:
+        kind: camera
+        translation_m: [10.25, -2.10, 2.75]
+      inspection-camera-target:
+        kind: camera
+        translation_m: [14.30, 0.80, 1.12]
   fukushima-daiichi:
     display_name: Fukushima Daiichi generic CAD model
     descriptor_uri: ../environments/fukushima_daiichi_solidworks.yaml
@@ -19,10 +39,50 @@ environments:
     preparation_scripts:
       - ../../scripts/fetch_fukushima_daiichi_cad.py
       - ../../scripts/convert_solidworks_to_usd.py
+    spawn_anchors:
+      ground-primary:
+        kind: ground_robot
+        translation_m: [0.0, -1.0, 0.0]
+        description: Supported lower-floor pose inside the Building CAD cutaway.
+      ground-secondary:
+        kind: ground_robot
+        translation_m: [0.0, 1.0, 0.0]
+      aerial-primary:
+        kind: aerial_robot
+        translation_m: [0.0, 1.0, 1.5]
+      decon-surface:
+        kind: work_surface
+        translation_m: [2.18, 0.0, 1.15]
+        description: Irregular contamination overlay on the visible CAD cut face.
+      inspection-camera-eye:
+        kind: camera
+        translation_m: [5.2, -4.0, 3.2]
+      inspection-camera-target:
+        kind: camera
+        translation_m: [1.3, 0.0, 1.1]
   jsi-triga:
     display_name: JSI TRIGA 2026 point-cloud environment
     descriptor_uri: ../environments/jsi_triga_2026.yaml
     description: Dataset-backed JSI TRIGA point-cloud environment.
+    spawn_anchors:
+      ground-primary:
+        kind: ground_robot
+        translation_m: [0.0, -1.0, 0.0]
+      ground-secondary:
+        kind: ground_robot
+        translation_m: [0.0, 1.0, 0.0]
+      aerial-primary:
+        kind: aerial_robot
+        translation_m: [0.0, 1.0, 1.5]
+      decon-surface:
+        kind: work_surface
+        translation_m: [2.0, 0.0, 1.15]
+      inspection-camera-eye:
+        kind: camera
+        translation_m: [5.0, -4.0, 3.0]
+      inspection-camera-target:
+        kind: camera
+        translation_m: [1.0, 0.0, 1.0]
 
 robot_sets:
   articulated-decommissioning:
@@ -37,11 +97,13 @@ robot_sets:
       - robot_id: packbot
         reference_model_id: irobot-packbot-fukushima
         prim_path: /World/Robots/PackBot
+        spawn_anchor: ground-primary
         translation_m: [2.0, -1.0, 0.0]
         yaw_deg: 0.0
       - robot_id: elios3
         reference_model_id: flyability-elios3-rad
         prim_path: /World/Robots/Elios3
+        spawn_anchor: aerial-primary
         translation_m: [2.0, 1.0, 1.5]
         yaw_deg: 0.0
   packbot-articulated:

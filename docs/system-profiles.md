@@ -16,9 +16,20 @@ choices. If a catalog environment has not been downloaded or converted yet,
 the same button changes to **環境を準備して適用 / Prepare** and runs its reviewed,
 repository-local preparation steps automatically.
 
-The **NATURAL LANGUAGE COMMAND / ROBOT LLM** section is intentionally separate. It accepts
-natural-language robot workflow instructions only; environment, robot-set, and
-detector-set switching always uses the explicit controls above.
+The **NATURAL LANGUAGE COMMAND / ROBOT LLM** section appears above the system
+configuration and is intentionally separate. It accepts natural-language robot
+workflow instructions only; environment, robot-set, and detector-set switching
+always uses the explicit controls below it.
+
+Each environment catalog entry also owns named `spawn_anchors`. Robot sets refer
+to semantic anchors such as `ground-primary` or `aerial-primary` instead of
+assuming one world coordinate works in every CAD. The environment also provides
+`decon-surface` and inspection-camera anchors for supported task workflows. A
+selected combination fails with a named configuration error when a required
+anchor is absent; it does not spawn a robot at an unverified origin. Ground
+anchors are authored on the environment's normalized Z=0 operating floor, and
+live articulated validation rejects a spawn that drops more than 0.15 m during
+physics settling.
 
 ## Common commands
 
@@ -107,7 +118,8 @@ as-built engineering record or used for safety decisions.
 ## Adding catalog entries
 
 - An environment entry references the existing environment descriptor contract
-  from `docs/environment-import.md`.
+  from `docs/environment-import.md` and declares the semantic spawn anchors
+  needed by compatible robot/task sets.
 - A `fleet` robot set references the generic USD/URDF/Xacro/MJCF fleet contract.
   A `reference` set uses the traceable lightweight nuclear-response models.
 - A detector set references built-in model IDs from

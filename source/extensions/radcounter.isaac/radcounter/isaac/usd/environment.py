@@ -51,6 +51,12 @@ def _material_for_name(name: str, config: EnvironmentImportConfig) -> str:
     return config.default_material_id
 
 
+def _usd_row_matrix_values(matrix: Any) -> tuple[tuple[float, ...], ...]:
+    """Transpose the core column-vector transform for USD's row-vector convention."""
+
+    return tuple(tuple(float(matrix[column][row]) for column in range(4)) for row in range(4))
+
+
 class EnvironmentUsdWriter:
     """Create a stable generated stage while preserving the source as immutable input."""
 
@@ -166,8 +172,8 @@ class EnvironmentUsdWriter:
         )
         matrix = normalization_matrix(config, defaults)
         gf_matrix = gf.Matrix4d()
-        for row in range(4):
-            gf_matrix.SetRow(row, gf.Vec4d(*[float(value) for value in matrix[row]]))
+        for row, values in enumerate(_usd_row_matrix_values(matrix)):
+            gf_matrix.SetRow(row, gf.Vec4d(*values))
         usd_geom.Xformable(root).AddTransformOp().Set(gf_matrix)
         for prim in stage.Traverse():
             if prim == root or not prim.IsA(usd_geom.Gprim):

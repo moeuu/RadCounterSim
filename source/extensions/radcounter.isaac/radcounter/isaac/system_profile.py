@@ -155,7 +155,7 @@ def _compose_robots(
     if kind == "none":
         return handles, None
     if kind == "reference":
-        from pxr import Gf
+        from pxr import Gf, Sdf
 
         for placement in selection.robot_set.reference_robots:
             spawned = spawn_reference_robot(
@@ -163,8 +163,23 @@ def _compose_robots(
                 placement.reference_model_id,
                 placement.prim_path,
             )
-            spawned.translation_op.Set(Gf.Vec3d(*placement.translation_m))
-            spawned.yaw_op.Set(float(placement.yaw_deg))
+            anchor = (
+                None
+                if placement.spawn_anchor is None
+                else selection.spawn_anchor(placement.spawn_anchor)
+            )
+            translation = placement.translation_m if anchor is None else anchor.translation_m
+            yaw_deg = placement.yaw_deg if anchor is None else anchor.yaw_deg
+            spawned.translation_op.Set(Gf.Vec3d(*translation))
+            spawned.yaw_op.Set(float(yaw_deg))
+            if anchor is not None:
+                prim = stage.GetPrimAtPath(spawned.prim_path)
+                prim.CreateAttribute(
+                    "rad:spawn:anchorId", Sdf.ValueTypeNames.String, custom=True
+                ).Set(placement.spawn_anchor)
+                prim.CreateAttribute(
+                    "rad:spawn:environmentId", Sdf.ValueTypeNames.String, custom=True
+                ).Set(selection.environment_id)
             handles[placement.robot_id] = _RobotHandle(
                 spawned.prim_path,
                 dict(spawned.sensor_links),
@@ -250,12 +265,12 @@ def _compose_detectors(
         xformable.AddRotateXYZOp().Set(Gf.Vec3f(*placement.rotation_rpy_deg))
         prim = xform.GetPrim()
         prim.CreateAttribute("rad:role", Sdf.ValueTypeNames.String, custom=True).Set("detector")
-        prim.CreateAttribute(
-            "rad:detector:id", Sdf.ValueTypeNames.String, custom=True
-        ).Set(placement.detector_id)
-        prim.CreateAttribute(
-            "rad:detector:modelId", Sdf.ValueTypeNames.String, custom=True
-        ).Set(resolved.descriptor.model_id)
+        prim.CreateAttribute("rad:detector:id", Sdf.ValueTypeNames.String, custom=True).Set(
+            placement.detector_id
+        )
+        prim.CreateAttribute("rad:detector:modelId", Sdf.ValueTypeNames.String, custom=True).Set(
+            resolved.descriptor.model_id
+        )
         body = UsdGeom.Cylinder.Define(stage, path + "/Body")
         body.CreateAxisAttr("X")
         body.CreateRadiusAttr(0.045)

@@ -30,6 +30,10 @@ def test_fukushima_profile_is_pinned_to_expected_conversion_target() -> None:
     selection = resolve_system_selection(profile_id="fukushima-packbot")
     assert selection.configurable
     assert selection.environment_config.format.value == "usd"
+    assert selection.environment_config.coordinate_system.up_axis.value == "auto"
+    assert selection.environment_config.translation_world_m == (2.2, 0.0, 18.0)
+    assert selection.spawn_anchor("ground-primary").translation_m == (0.0, -1.0, 0.0)
+    assert selection.spawn_anchor("decon-surface").translation_m == (2.18, 0.0, 1.15)
     assert selection.environment_source_path is not None
     assert selection.environment_source_path.as_posix().endswith(
         ".cache/external/fukushima_daiichi_solidworks/export/Building.usdc"
@@ -42,6 +46,10 @@ def test_fukushima_profile_is_pinned_to_expected_conversion_target() -> None:
     assert {item.robot_id for item in selection.robot_set.reference_robots} == {
         "packbot",
         "elios3",
+    }
+    assert {item.spawn_anchor for item in selection.robot_set.reference_robots} == {
+        "ground-primary",
+        "aerial-primary",
     }
     assert {item.placement.detector_id for item in selection.detectors} == {
         "packbot-gm",
@@ -134,5 +142,8 @@ def test_operator_gui_has_separate_explicit_system_and_llm_controls() -> None:
     assert '"Detector"' in dashboard
     assert "選択した構成を適用 / Apply" in dashboard
     assert "NATURAL LANGUAGE COMMAND / ROBOT LLM" in dashboard
-    assert "構成変更は上の選択欄" in dashboard
+    assert "構成変更は下の選択欄" in dashboard
+    assert dashboard.index("NATURAL LANGUAGE COMMAND / ROBOT LLM") < dashboard.index(
+        "self._build_system_selector()"
+    )
     assert "save_active_selection(" in dashboard

@@ -25,18 +25,29 @@ class _FrozenModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class EnvironmentSpawnAnchor(_FrozenModel):
+    """A curated, environment-relative pose that keeps catalog robots operable."""
+
+    kind: Literal["ground_robot", "aerial_robot", "work_surface", "camera"]
+    translation_m: tuple[float, float, float]
+    yaw_deg: float = 0.0
+    description: str = ""
+
+
 class EnvironmentCatalogEntry(_FrozenModel):
     display_name: str = Field(min_length=1)
     descriptor_uri: str = Field(min_length=1)
     description: str = ""
     setup_hint: str | None = None
     preparation_scripts: tuple[str, ...] = ()
+    spawn_anchors: dict[str, EnvironmentSpawnAnchor] = Field(default_factory=dict)
 
 
 class ReferenceRobotPlacement(_FrozenModel):
     robot_id: str = Field(min_length=1)
     reference_model_id: str = Field(min_length=1)
     prim_path: str = Field(pattern=r"^/World(?:/.*)?$")
+    spawn_anchor: str | None = None
     translation_m: tuple[float, float, float] = (0.0, 0.0, 0.0)
     yaw_deg: float = 0.0
 
@@ -186,6 +197,16 @@ class ResolvedSystemSelection:
             for uri in self.environment_entry.preparation_scripts
         )
 
+    def spawn_anchor(self, anchor_id: str) -> EnvironmentSpawnAnchor:
+        """Resolve a named pose from the selected environment's operator layout."""
+
+        try:
+            return self.environment_entry.spawn_anchors[anchor_id]
+        except KeyError as error:
+            raise ValueError(
+                f"environment {self.environment_id!r} has no spawn anchor {anchor_id!r}"
+            ) from error
+
     def as_dict(self) -> dict[str, object]:
         source = self.environment_source_path
         return {
@@ -201,9 +222,11 @@ class ResolvedSystemSelection:
                 "source": str(source) if source is not None else self.environment_config.uri,
                 "ready": self.environment_ready,
                 "setup_hint": self.environment_entry.setup_hint,
-                "preparation_scripts": [
-                    str(path) for path in self.environment_preparation_scripts
-                ],
+                "preparation_scripts": [str(path) for path in self.environment_preparation_scripts],
+                "spawn_anchors": {
+                    anchor_id: anchor.model_dump(mode="json")
+                    for anchor_id, anchor in self.environment_entry.spawn_anchors.items()
+                },
             },
             "robot_set": {
                 "id": self.robot_set_id,
@@ -215,6 +238,7 @@ class ResolvedSystemSelection:
                         "robot_id": robot.robot_id,
                         "reference_model_id": robot.reference_model_id,
                         "prim_path": robot.prim_path,
+                        "spawn_anchor": robot.spawn_anchor,
                     }
                     for robot in self.robot_set.reference_robots
                 ],
@@ -360,6 +384,19 @@ def resolve_system_selection(
         "decommissioning": {"countermeasure", "measurement"},
         "none": set(),
     }[robot_set.kind]
+    missing_spawn_anchors = sorted(
+        {
+            robot.spawn_anchor
+            for robot in robot_set.reference_robots
+            if robot.spawn_anchor is not None
+            and robot.spawn_anchor not in environment_entry.spawn_anchors
+        }
+    )
+    if missing_spawn_anchors:
+        raise ValueError(
+            f"environment {selected_environment!r} does not provide spawn anchors required by "
+            f"robot set {selected_robots!r}: {missing_spawn_anchors}"
+        )
     missing_detector_robots = sorted(
         {
             item.placement.parent_robot_id
@@ -444,9 +481,7 @@ def load_active_selection(
     return resolve_system_selection(
         catalog_path=os.environ.get("RADCOUNTER_SYSTEM_CATALOG") or payload["catalog_path"],
         profile_id=os.environ.get("RADCOUNTER_SYSTEM_PROFILE") or payload["profile_id"],
-        environment_id=os.environ.get("RADCOUNTER_ENVIRONMENT")
-        or payload.get("environment_id"),
+        environment_id=os.environ.get("RADCOUNTER_ENVIRONMENT") or payload.get("environment_id"),
         robot_set_id=os.environ.get("RADCOUNTER_ROBOT_SET") or payload.get("robot_set_id"),
-        detector_set_id=os.environ.get("RADCOUNTER_DETECTOR_SET")
-        or payload.get("detector_set_id"),
+        detector_set_id=os.environ.get("RADCOUNTER_DETECTOR_SET") or payload.get("detector_set_id"),
     )

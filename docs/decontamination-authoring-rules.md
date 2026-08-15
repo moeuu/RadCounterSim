@@ -102,6 +102,14 @@ truth.
 
 ## Complex validation environment
 
+The facility in this section belongs to the standalone `vertical-slice`
+environment. It must not be silently authored over an imported CAD, point
+cloud, or other catalog environment. External environments keep their own
+visible/collision geometry and use named catalog spawn anchors for robots,
+work surfaces, and inspection cameras. A decontamination overlay placed in an
+external environment must still lie on the visible host CAD surface and retain
+the exact rendered/contact/activity geometry required above.
+
 1. Product GUI validation uses the deterministic layout returned by
    `decommissioning_facility_layout`: the original cell, remote decontamination
    room, reactor service room, and shield-staging room are connected by three

@@ -25,9 +25,7 @@ NavigationProgressCallback = Callable[
 
 @dataclass(frozen=True, slots=True)
 class RealRobotAssetConfig:
-    countermeasure_asset: str = (
-        "/Isaac/Robots/Clearpath/RidgebackFranka/ridgeback_franka.usd"
-    )
+    countermeasure_asset: str = "/Isaac/Robots/Clearpath/RidgebackFranka/ridgeback_franka.usd"
     measurement_asset: str = "/Isaac/Robots/NVIDIA/NovaCarter/nova_carter.usd"
     countermeasure_root: str = "/World/CountermeasureRobot"
     measurement_root: str = "/World/MeasurementRobot"
@@ -35,15 +33,14 @@ class RealRobotAssetConfig:
     detector_path: str = "/World/MeasurementRobot/chassis_link/Detector"
     panda_base_path: str = "/World/CountermeasureRobot/panda_link0"
     panda_hand_path: str = "/World/CountermeasureRobot/panda_hand"
-    decon_tool_path: str = (
-        "/World/CountermeasureRobot/panda_hand/RadCounterDeconTool/ContactPad"
-    )
+    decon_tool_path: str = "/World/CountermeasureRobot/panda_hand/RadCounterDeconTool/ContactPad"
     shield_path: str = "/World/LeadShield"
     shield_grasp_path: str = "/World/LeadShield/ShieldGraspFrame"
     shield_grasp_offset_m: tuple[float, float, float] = (-0.24, 0.0, 0.59)
     decon_surface_path: str = "/World/DeconWorkSurface"
     decon_workbench_center_m: tuple[float, float, float] = (14.39, 0.80, 1.15)
     shield_initial_position_m: tuple[float, float, float] = (0.78, -0.62, 0.0)
+    include_validation_facility: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,9 +166,7 @@ class MeasurementMotionReport:
     @property
     def message(self) -> str:
         return (
-            "wheel-joint navigation completed"
-            if self.success
-            else "wheel-joint navigation failed"
+            "wheel-joint navigation completed" if self.success else "wheel-joint navigation failed"
         )
 
     @property
@@ -968,9 +963,7 @@ def facility_route_clearance_m(
         if primitive.collision and primitive.category in {"wall", "equipment"}
     )
     minimum = math.inf
-    for start, end in zip(
-        route.waypoints_m[:-1], route.waypoints_m[1:], strict=True
-    ):
+    for start, end in zip(route.waypoints_m[:-1], route.waypoints_m[1:], strict=True):
         distance = math.dist(start[:2], end[:2])
         sample_count = max(1, int(math.ceil(distance / sample_spacing_m)))
         for sample_index in range(sample_count + 1):
@@ -1065,9 +1058,7 @@ def _cylinder(
     cylinder.CreateAxisAttr(axis)
     cylinder.CreateRadiusAttr(radius)
     cylinder.CreateHeightAttr(height)
-    UsdGeom.Xformable(cylinder).AddTranslateOp().Set(
-        Gf.Vec3d(*map(float, translate))
-    )
+    UsdGeom.Xformable(cylinder).AddTranslateOp().Set(Gf.Vec3d(*map(float, translate)))
     cylinder.CreateDisplayColorAttr([Gf.Vec3f(*map(float, color))])
     if collision:
         UsdPhysics.CollisionAPI.Apply(cylinder.GetPrim()).CreateCollisionEnabledAttr(True)
@@ -1127,9 +1118,7 @@ def _author_remote_decon_facility(
 
     UsdGeom.Scope.Define(stage, f"{root_path}/Rooms")
     for room in layout.rooms:
-        marker = UsdGeom.Xform.Define(
-            stage, f"{root_path}/Rooms/{room.room_id}"
-        ).GetPrim()
+        marker = UsdGeom.Xform.Define(stage, f"{root_path}/Rooms/{room.room_id}").GetPrim()
         marker.SetDisplayName(room.display_name)
         for name, value_type, value in (
             ("rad:facility:roomId", Sdf.ValueTypeNames.String, room.room_id),
@@ -1192,8 +1181,7 @@ def _author_remote_decon_facility(
                 ).GetPrim()
                 equipment_roots[primitive.equipment_id] = equipment_root
                 equipment_root.SetDisplayName(
-                    primitive.display_name
-                    or primitive.equipment_id.replace("_", " ").title()
+                    primitive.display_name or primitive.equipment_id.replace("_", " ").title()
                 )
                 for name, value_type, value in (
                     ("rad:role", Sdf.ValueTypeNames.String, "facility_equipment"),
@@ -1300,9 +1288,7 @@ def _author_remote_decon_facility(
                 "route_marking",
             )
 
-    remote_station = UsdGeom.Xform.Define(
-        stage, "/World/DetectorStations/RemoteDeconRoom"
-    )
+    remote_station = UsdGeom.Xform.Define(stage, "/World/DetectorStations/RemoteDeconRoom")
     remote_station.ClearXformOpOrder()
     remote_station.AddTranslateOp().Set(Gf.Vec3d(11.10, 1.65, 0.80))
     station_prim = remote_station.GetPrim()
@@ -1448,13 +1434,14 @@ def author_real_robot_task_scene(
     # remains in the stage for provenance, but cannot participate in treatment
     # or radiation after the high-fidelity task scene is composed.
     legacy_surface = stage.GetPrimAtPath("/World/ContaminatedFloor")
-    legacy_collision = legacy_surface.GetAttribute("physics:collisionEnabled")
-    if legacy_collision:
-        legacy_collision.Set(False)
-    for attribute_name in ("rad:source:enabled", "rad:decon:enabled"):
-        attribute = legacy_surface.GetAttribute(attribute_name)
-        if attribute:
-            attribute.Set(False)
+    if legacy_surface.IsValid():
+        legacy_collision = legacy_surface.GetAttribute("physics:collisionEnabled")
+        if legacy_collision:
+            legacy_collision.Set(False)
+        for attribute_name in ("rad:source:enabled", "rad:decon:enabled"):
+            attribute = legacy_surface.GetAttribute(attribute_name)
+            if attribute:
+                attribute.Set(False)
 
     countermeasure = stage.GetPrimAtPath(cfg.countermeasure_root)
     measurement = stage.GetPrimAtPath(cfg.measurement_root)
@@ -1592,12 +1579,8 @@ def author_real_robot_task_scene(
     maximum_activity = max(float(field.max()), 1e-12)
     wall_color = np.asarray((0.20, 0.27, 0.32), dtype=np.float64)
     for row, column in active_cells:
-        y_center = surface_y + (
-            (float(column) + 0.5) * cell_width_m - source_width_m * 0.5
-        )
-        z_center = surface_z + (
-            (float(row) + 0.5) * cell_height_m - source_height_m * 0.5
-        )
+        y_center = surface_y + ((float(column) + 0.5) * cell_width_m - source_width_m * 0.5)
+        z_center = surface_z + ((float(row) + 0.5) * cell_height_m - source_height_m * 0.5)
         half_y = cell_width_m * 0.515
         half_z = cell_height_m * 0.515
         start = len(points)
@@ -1611,9 +1594,7 @@ def author_real_robot_task_scene(
         )
         # Clockwise winding from the room gives both triangles a -X normal,
         # matching a tool that approaches the east wall from inside the room.
-        indices.extend(
-            (start, start + 2, start + 1, start, start + 3, start + 2)
-        )
+        indices.extend((start, start + 2, start + 1, start, start + 3, start + 2))
         fraction = float(field[row, column]) / maximum_activity
         hot_overlay = np.asarray(
             (0.44 + 0.42 * fraction, 0.055 + 0.08 * fraction, 0.018),
@@ -1671,7 +1652,20 @@ def author_real_robot_task_scene(
         Sdf.ValueTypeNames.String,
         "vertical_x",
     )
-    facility_layout = _author_remote_decon_facility(stage)
+    facility_layout = (
+        _author_remote_decon_facility(stage) if cfg.include_validation_facility else None
+    )
+    if facility_layout is None:
+        # Imported environments retain their own geometry.  The canonical
+        # validation cell remains available as the separate vertical-slice
+        # environment and must never be silently overlaid on a selected CAD.
+        for validation_path in (
+            "/World/RemoteDeconFacility",
+            "/World/StagingLeadShield",
+            "/World/DetectorStations/RemoteDeconRoom",
+        ):
+            if stage.GetPrimAtPath(validation_path).IsValid():
+                stage.RemovePrim(validation_path)
 
     shield = UsdGeom.Xform.Define(stage, cfg.shield_path)
     shield.AddTranslateOp().Set(Gf.Vec3d(*cfg.shield_initial_position_m))
@@ -1728,11 +1722,12 @@ def author_real_robot_task_scene(
     )
     grasp = UsdGeom.Xform.Define(stage, cfg.shield_grasp_path)
     grasp.AddTranslateOp().Set(Gf.Vec3d(*cfg.shield_grasp_offset_m))
-    _author_staging_lead_shield(
-        stage,
-        facility_layout,
-        grasp_offset_m=cfg.shield_grasp_offset_m,
-    )
+    if facility_layout is not None:
+        _author_staging_lead_shield(
+            stage,
+            facility_layout,
+            grasp_offset_m=cfg.shield_grasp_offset_m,
+        )
     UsdGeom.Xform.Define(stage, "/World/DeconCleanTrace")
 
     # Give every generic manipulation prop a stand-off handle that the Franka
@@ -1756,7 +1751,11 @@ def author_real_robot_task_scene(
     for object_path, frame_name, frame_offset, payload_kg in payloads:
         object_prim = stage.GetPrimAtPath(object_path)
         if not object_prim or not object_prim.IsValid():
-            raise RuntimeError(f"manipulation prop is missing: {object_path}")
+            # Environment catalogs may supply only the selected facility and
+            # articulated decontamination task. Optional relocation/disposal
+            # props are augmented when present and simply remain unavailable
+            # as actions when absent.
+            continue
         UsdPhysics.MassAPI.Apply(object_prim).CreateMassAttr(payload_kg)
         _custom_attribute(
             object_prim,
@@ -1844,9 +1843,7 @@ class RidgebackFrankaController:
         arm = self._arm_positions()
         self._arm_min = arm.copy()
         self._arm_max = arm.copy()
-        self._grasp_joint_path = (
-            self.config.panda_hand_path + "/RadCounterShieldGraspJoint"
-        )
+        self._grasp_joint_path = self.config.panda_hand_path + "/RadCounterShieldGraspJoint"
         self._handle_collision_enabled = True
         self._grasp_collision_state: dict[str, bool] = {}
         self._grasped_object_path: str | None = None
@@ -1943,9 +1940,7 @@ class RidgebackFrankaController:
         if target.shape not in {(2,), (3,)}:
             raise ValueError("target_position_m must contain x/y or x/y/z")
         yaw = (
-            float(self.last_base_positions[2])
-            if target_yaw_rad is None
-            else float(target_yaw_rad)
+            float(self.last_base_positions[2]) if target_yaw_rad is None else float(target_yaw_rad)
         )
         self._transition("navigating")
         distance = float(np.linalg.norm(target[:2] - self.last_base_positions[:2]))
@@ -2029,9 +2024,7 @@ class RidgebackFrankaController:
 
         target = np.asarray(target_position_m, dtype=np.float64)
         orientation = np.asarray(
-            self.downward_orientation_wxyz
-            if orientation_wxyz is None
-            else orientation_wxyz,
+            self.downward_orientation_wxyz if orientation_wxyz is None else orientation_wxyz,
             dtype=np.float64,
         )
         self._sync_kinematics_base()
@@ -2112,9 +2105,7 @@ class RidgebackFrankaController:
         from isaacsim.core.utils.types import ArticulationAction
 
         target = np.asarray((0.0, -0.60, 0.0, -2.0, 0.0, 1.50, 0.75))
-        indices = np.asarray(
-            [self.indices[name] for name in self.arm_joint_names], dtype=np.int32
-        )
+        indices = np.asarray([self.indices[name] for name in self.arm_joint_names], dtype=np.int32)
         start = self._positions()[indices]
         self._transition("stowing_arm")
         for frame in range(1, interpolation_steps + 1):
@@ -2240,8 +2231,7 @@ class RidgebackFrankaController:
                     raise ValueError("max_waypoint_speed_m_s must be positive")
                 distance_m = float(
                     np.linalg.norm(
-                        np.asarray(waypoint, dtype=np.float64)
-                        - self.end_effector_position()
+                        np.asarray(waypoint, dtype=np.float64) - self.end_effector_position()
                     )
                 )
                 interpolation_steps = max(
@@ -2290,9 +2280,7 @@ class RidgebackFrankaController:
             if activity_before > 0.0
             else 0.0
         )
-        coverage_fraction = len(triangles) / max(
-            len(decontaminator.triangle_indices), 1
-        )
+        coverage_fraction = len(triangles) / max(len(decontaminator.triangle_indices), 1)
         return DecontaminationMotionReport(
             accepted > 0
             and removed > 0.0
@@ -2320,9 +2308,11 @@ class RidgebackFrankaController:
         from pxr import Usd, UsdGeom
 
         surface = self.stage.GetPrimAtPath(decontaminator.surface_path)
-        bounds = UsdGeom.BBoxCache(
-            Usd.TimeCode.Default(), [UsdGeom.Tokens.default_]
-        ).ComputeWorldBound(surface).ComputeAlignedRange()
+        bounds = (
+            UsdGeom.BBoxCache(Usd.TimeCode.Default(), [UsdGeom.Tokens.default_])
+            .ComputeWorldBound(surface)
+            .ComputeAlignedRange()
+        )
         lower = np.asarray(bounds.GetMin(), dtype=np.float64)
         upper = np.asarray(bounds.GetMax(), dtype=np.float64)
         if not np.all(np.isfinite(lower)) or not np.all(np.isfinite(upper)):
@@ -2369,9 +2359,7 @@ class RidgebackFrankaController:
             waypoints = tuple(
                 (hand_x, y_position, float(z_position))
                 for row, z_position in enumerate(z_rows)
-                for y_position in (
-                    y_limits if row % 2 == 0 else y_limits[::-1]
-                )
+                for y_position in (y_limits if row % 2 == 0 else y_limits[::-1])
             )
             approach_offset = (-0.08, 0.0, 0.0)
             retreat_offset = (-0.12, 0.0, 0.0)
@@ -2381,9 +2369,7 @@ class RidgebackFrankaController:
             required_coverage_fraction = 0.35
             max_waypoint_speed_m_s = 0.20
         else:
-            margin = np.minimum(
-                (upper - lower) * 0.18, np.asarray((0.07, 0.07, 0.0))
-            )
+            margin = np.minimum((upper - lower) * 0.18, np.asarray((0.07, 0.07, 0.0)))
             x_values = np.linspace(lower[0] + margin[0], upper[0] - margin[0], 3)
             y_values = (lower[1] + margin[1], upper[1] - margin[1])
             # The proven contact hand height is 0.139 m above a horizontal
@@ -2485,9 +2471,7 @@ class RidgebackFrankaController:
         """Restore handle collisions after the open fingers have retracted."""
 
         for path, enabled in self._grasp_collision_state.items():
-            collision = self.stage.GetPrimAtPath(path).GetAttribute(
-                "physics:collisionEnabled"
-            )
+            collision = self.stage.GetPrimAtPath(path).GetAttribute("physics:collisionEnabled")
             if collision:
                 collision.Set(enabled)
         self._grasp_collision_state.clear()
@@ -2562,8 +2546,13 @@ class RidgebackFrankaController:
         phases.extend(pickup.phases)
         if not pickup.success:
             return ArticulatedTaskReport(
-                "failed", False, total_steps, "pickup base motion failed", object_path,
-                tuple(phases), arm_joint_excursion_rad=self.arm_joint_excursion_rad
+                "failed",
+                False,
+                total_steps,
+                "pickup base motion failed",
+                object_path,
+                tuple(phases),
+                arm_joint_excursion_rad=self.arm_joint_excursion_rad,
             )
 
         target = self.stage.GetPrimAtPath(object_path)
@@ -2591,7 +2580,8 @@ class RidgebackFrankaController:
                         f"error={motion.position_error_m:.4f} m"
                     ),
                     object_path,
-                    tuple(phases), finger_aperture_open_m=open_aperture,
+                    tuple(phases),
+                    finger_aperture_open_m=open_aperture,
                     arm_joint_excursion_rad=self.arm_joint_excursion_rad,
                 )
         # The authored service handle is 30 mm thick.  Command a 32 mm total
@@ -2663,16 +2653,22 @@ class RidgebackFrankaController:
         if not carried.success:
             self._release_object()
             return ArticulatedTaskReport(
-                "failed", False, total_steps, "loaded base route failed", object_path,
-                tuple(phases), grasp_distance, finger_aperture_open_m=open_aperture,
+                "failed",
+                False,
+                total_steps,
+                "loaded base route failed",
+                object_path,
+                tuple(phases),
+                grasp_distance,
+                finger_aperture_open_m=open_aperture,
                 finger_aperture_closed_m=closed_aperture,
                 arm_joint_excursion_rad=self.arm_joint_excursion_rad,
             )
         if target_root_position_m is None:
             destination_root = np.asarray(placement_base_position_m, dtype=np.float64).copy()
-            destination_root[:2] += object_initial[:2] - np.asarray(
-                pickup_base_position_m, dtype=np.float64
-            )[:2]
+            destination_root[:2] += (
+                object_initial[:2] - np.asarray(pickup_base_position_m, dtype=np.float64)[:2]
+            )
             destination_root[2] = object_initial[2]
         else:
             destination_root = np.asarray(target_root_position_m, dtype=np.float64)
@@ -2690,9 +2686,7 @@ class RidgebackFrankaController:
             # fall onto one edge and topple during the settle audit.
             (destination_grasp + np.asarray((0.0, 0.0, 0.005)), 0.012),
         )
-        for index, (target_position, tolerance_m) in enumerate(
-            placement_targets, start=1
-        ):
+        for index, (target_position, tolerance_m) in enumerate(placement_targets, start=1):
             motion = self.move_hand(target_position, tolerance_m=tolerance_m)
             total_steps += motion.steps
             phases.append(f"place_{index}")
@@ -2708,7 +2702,9 @@ class RidgebackFrankaController:
                         f"actual={motion.final_position_m}, "
                         f"error={motion.position_error_m:.4f} m"
                     ),
-                    object_path, tuple(phases), grasp_distance,
+                    object_path,
+                    tuple(phases),
+                    grasp_distance,
                     finger_aperture_open_m=open_aperture,
                     finger_aperture_closed_m=closed_aperture,
                     arm_joint_excursion_rad=self.arm_joint_excursion_rad,
@@ -2887,8 +2883,15 @@ class RidgebackFrankaController:
         initial, _ = _world_pose(self.stage, self.config.shield_path)
         if not self.move_base(pickup_base_xy_yaw):
             return ShieldMotionReport(
-                False, "pickup_base", math.inf, 0.0, 0.0, 0.0, math.inf,
-                tuple(map(float, initial)), tuple(map(float, initial)),
+                False,
+                "pickup_base",
+                math.inf,
+                0.0,
+                0.0,
+                0.0,
+                math.inf,
+                tuple(map(float, initial)),
+                tuple(map(float, initial)),
                 (float(np.linalg.norm(self.last_base_positions - self.last_base_target)),),
                 (),
                 (),
@@ -2900,9 +2903,18 @@ class RidgebackFrankaController:
         grasp_motion = self.move_hand(grasp_position) if approach_motion.success else None
         if not approach_motion.success or grasp_motion is None or not grasp_motion.success:
             return ShieldMotionReport(
-                False, "pickup_hand", math.inf, open_aperture, 0.0, 0.0, math.inf,
-                tuple(map(float, initial)), tuple(map(float, initial)), ()
-                , (), ()
+                False,
+                "pickup_hand",
+                math.inf,
+                open_aperture,
+                0.0,
+                0.0,
+                math.inf,
+                tuple(map(float, initial)),
+                tuple(map(float, initial)),
+                (),
+                (),
+                (),
             )
         # Match the 30 mm handle thickness before creating the verified fixed
         # joint; an 8 mm commanded gap causes a large PhysX separation impulse.
@@ -2912,9 +2924,18 @@ class RidgebackFrankaController:
         if not self.move_hand(lift_target).success:
             self._release_shield()
             return ShieldMotionReport(
-                False, "lift", grasp_distance, open_aperture, closed_aperture, 0.0, math.inf,
-                tuple(map(float, initial)), tuple(map(float, initial)), ()
-                , (), ()
+                False,
+                "lift",
+                grasp_distance,
+                open_aperture,
+                closed_aperture,
+                0.0,
+                math.inf,
+                tuple(map(float, initial)),
+                tuple(map(float, initial)),
+                (),
+                (),
+                (),
             )
         if transport_hand_offset_from_grasp_m is not None:
             transport_offset = np.asarray(
@@ -2950,9 +2971,7 @@ class RidgebackFrankaController:
         base_errors: list[float] = []
         for waypoint in placement_base_route_xy_yaw:
             if not self.move_base(waypoint):
-                base_error = float(
-                    np.linalg.norm(self.last_base_positions - self.last_base_target)
-                )
+                base_error = float(np.linalg.norm(self.last_base_positions - self.last_base_target))
                 base_errors.append(base_error)
                 self._release_shield()
                 final, _ = _world_pose(self.stage, self.config.shield_path)
@@ -3131,12 +3150,8 @@ class NovaCarterController:
     def _command(self, linear_m_s: float, angular_rad_s: float) -> None:
         from isaacsim.core.utils.types import ArticulationAction
 
-        left = (
-            linear_m_s - angular_rad_s * self.wheel_base_m / 2.0
-        ) / self.wheel_radius_m
-        right = (
-            linear_m_s + angular_rad_s * self.wheel_base_m / 2.0
-        ) / self.wheel_radius_m
+        left = (linear_m_s - angular_rad_s * self.wheel_base_m / 2.0) / self.wheel_radius_m
+        right = (linear_m_s + angular_rad_s * self.wheel_base_m / 2.0) / self.wheel_radius_m
         self.robot.apply_wheel_actions(
             ArticulationAction(joint_velocities=np.asarray((left, right), dtype=np.float64))
         )
@@ -3169,9 +3184,7 @@ class NovaCarterController:
         steps = 0
         for step in range(1, maximum_steps + 1):
             steps = step
-            position, orientation = _world_pose(
-                self.stage, self.config.measurement_articulation
-            )
+            position, orientation = _world_pose(self.stage, self.config.measurement_articulation)
             error = target[:2] - position[:2]
             distance = float(np.linalg.norm(error))
             if self.progress_callback is not None and (step == 1 or step % 15 == 0):
@@ -3229,9 +3242,11 @@ class NovaCarterController:
                 tuple(map(float, initial)),
                 tuple(map(float, initial)),
             )
-        if self.home_position_m is not None and np.linalg.norm(
-            initial[:2] - np.asarray(self.home_position_m[:2], dtype=np.float64)
-        ) <= 0.20:
+        if (
+            self.home_position_m is not None
+            and np.linalg.norm(initial[:2] - np.asarray(self.home_position_m[:2], dtype=np.float64))
+            <= 0.20
+        ):
             outbound_nodes = (initial, *(np.asarray(item, dtype=np.float64) for item in waypoints))
             self._home_return_route_m = tuple(
                 tuple(map(float, node[:3])) for node in reversed(outbound_nodes[:-1])
@@ -3241,9 +3256,7 @@ class NovaCarterController:
             report = self.navigate_to(waypoint)
             total_steps += report.steps
             if not report.success:
-                final, _ = _world_pose(
-                    self.stage, self.config.measurement_articulation
-                )
+                final, _ = _world_pose(self.stage, self.config.measurement_articulation)
                 return MeasurementMotionReport(
                     False,
                     total_steps,
