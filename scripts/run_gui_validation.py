@@ -8,6 +8,9 @@ import asyncio
 import importlib
 import json
 import math
+import os
+import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -68,6 +71,25 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=False,
     )
+    parser.add_argument(
+        "--record-prompt-video",
+        type=Path,
+        help=(
+            "record a visible scripted initial-command demonstration without "
+            "synthesizing mouse or keyboard input"
+        ),
+    )
+    parser.add_argument("--record-display", default=os.environ.get("DISPLAY", ":0.0"))
+    parser.add_argument("--record-monitor-x", type=int, default=0)
+    parser.add_argument("--record-monitor-y", type=int, default=0)
+    parser.add_argument("--record-monitor-width", type=int, default=1920)
+    parser.add_argument("--record-monitor-height", type=int, default=1080)
+    parser.add_argument("--record-fps", type=int, default=30)
+    parser.add_argument("--prompt-typing-delay-s", type=float, default=0.04)
+    parser.add_argument("--prompt-pre-hold-s", type=float, default=2.0)
+    parser.add_argument("--prompt-post-hold-s", type=float, default=2.0)
+    parser.add_argument("--prompt-confirm-hold-s", type=float, default=2.5)
+    parser.add_argument("--record-final-hold-s", type=float, default=4.0)
     parser.add_argument(
         "--complex-natural-language-validation",
         action=argparse.BooleanOptionalAction,
@@ -131,6 +153,28 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--natural-language-timeout-s must be positive")
     if not math.isfinite(arguments.max_fps) or arguments.max_fps < 0.0:
         parser.error("--max-fps must be a finite non-negative number")
+    recording_delays = (
+        arguments.prompt_typing_delay_s,
+        arguments.prompt_pre_hold_s,
+        arguments.prompt_post_hold_s,
+        arguments.prompt_confirm_hold_s,
+        arguments.record_final_hold_s,
+    )
+    if any(not math.isfinite(value) or value < 0.0 for value in recording_delays):
+        parser.error("prompt recording delays must be finite and non-negative")
+    if arguments.record_fps <= 0:
+        parser.error("--record-fps must be positive")
+    if arguments.record_monitor_width <= 0 or arguments.record_monitor_height <= 0:
+        parser.error("recording dimensions must be positive")
+    if arguments.record_prompt_video is not None:
+        if not arguments.interactive:
+            parser.error("--record-prompt-video requires --interactive")
+        if not arguments.initial_command:
+            parser.error("--record-prompt-video requires --initial-command")
+        if not arguments.confirm_initial_command:
+            parser.error("--record-prompt-video requires --confirm-initial-command")
+        if arguments.headless:
+            parser.error("--record-prompt-video requires a visible GUI")
     return arguments
 
 
@@ -332,6 +376,89 @@ def _hold(app: Any, duration_s: float) -> None:
     deadline = time.monotonic() + max(0.0, duration_s)
     while time.monotonic() < deadline and app.is_running():
         app.update()
+
+
+def _type_visible_instruction(
+    app: Any,
+    dashboard: Any,
+    instruction: str,
+    *,
+    character_delay_s: float,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> None:
+    """Render typed text through the UI model without owning operator input devices."""
+
+    dashboard.set_natural_language_input("")
+    app.update()
+    for end in range(1, len(instruction) + 1):
+        dashboard.set_natural_language_input(instruction[:end])
+        app.update()
+        if character_delay_s:
+            sleeper(character_delay_s)
+
+
+def _start_display_recording(args: argparse.Namespace) -> subprocess.Popen[bytes]:
+    """Capture the requested X11 monitor region without changing focus or input state."""
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise RuntimeError("ffmpeg is required for --record-prompt-video")
+    output = args.record_prompt_video.expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        ffmpeg,
+        "-y",
+        "-loglevel",
+        "warning",
+        "-f",
+        "x11grab",
+        "-framerate",
+        str(args.record_fps),
+        "-video_size",
+        f"{args.record_monitor_width}x{args.record_monitor_height}",
+        "-i",
+        (
+            f"{args.record_display}+{args.record_monitor_x},"
+            f"{args.record_monitor_y}"
+        ),
+        "-c:v",
+        "h264_nvenc",
+        "-preset",
+        "p4",
+        "-tune",
+        "hq",
+        "-rc",
+        "vbr",
+        "-cq",
+        "18",
+        "-b:v",
+        "10M",
+        "-pix_fmt",
+        "yuv420p",
+        "-movflags",
+        "+faststart",
+        str(output),
+    ]
+    return subprocess.Popen(
+        command,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+    )
+
+
+def _stop_display_recording(process: subprocess.Popen[bytes]) -> None:
+    """Finalize an ffmpeg capture and surface encoder failures."""
+
+    stderr = b""
+    try:
+        stderr = process.communicate(input=b"q\n", timeout=20.0)[1]
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        stderr = process.communicate(timeout=10.0)[1]
+    if process.returncode != 0:
+        message = stderr.decode("utf-8", errors="replace")[-4000:]
+        raise RuntimeError(f"ffmpeg display recording failed: {message}")
 
 
 def _world_position(stage: Any, prim_path: str) -> np.ndarray:
@@ -1982,24 +2109,6 @@ def _run_validation(
 
     if args.interactive:
         context_view = dashboard.natural_language_context()
-        command_result = None
-        if args.initial_command:
-            submission = _complete_with_updates(
-                app,
-                dashboard.submit_natural_language_instruction(
-                    args.initial_command,
-                    confirm_physical=args.confirm_initial_command,
-                ),
-                before_update=dashboard.process_pending_natural_language_actions,
-            )
-            command_result = {
-                "instruction": args.initial_command,
-                "plan": submission.validated.plan.model_dump(mode="json"),
-                "executed": submission.executed,
-                "results": list(submission.results),
-            }
-            if submission.executed:
-                _configure_decon_room_camera(stage)
         panel.update(
             "Ready for natural-language operation",
             0,
@@ -2011,6 +2120,63 @@ def _run_validation(
             },
         )
         panel.hide()
+        command_result = None
+        if args.initial_command:
+            if args.record_prompt_video is not None:
+                dashboard.show_building_overview()
+                for _ in range(30):
+                    app.update()
+                recording_process = _start_display_recording(args)
+                try:
+                    _hold(app, args.prompt_pre_hold_s)
+                    _type_visible_instruction(
+                        app,
+                        dashboard,
+                        args.initial_command,
+                        character_delay_s=args.prompt_typing_delay_s,
+                    )
+                    _hold(app, args.prompt_post_hold_s)
+                    submission = _complete_with_updates(
+                        app,
+                        dashboard.interpret_natural_language_instruction(
+                            args.initial_command,
+                        ),
+                        before_update=dashboard.process_pending_natural_language_actions,
+                        timeout_s=args.natural_language_timeout_s,
+                    )
+                    _hold(app, args.prompt_confirm_hold_s)
+                    submission = _complete_with_updates(
+                        app,
+                        dashboard.execute_confirmed_natural_language_instruction(),
+                        before_update=dashboard.process_pending_natural_language_actions,
+                        timeout_s=args.natural_language_timeout_s,
+                    )
+                    _hold(app, args.record_final_hold_s)
+                finally:
+                    _stop_display_recording(recording_process)
+            else:
+                submission = _complete_with_updates(
+                    app,
+                    dashboard.submit_natural_language_instruction(
+                        args.initial_command,
+                        confirm_physical=args.confirm_initial_command,
+                    ),
+                    before_update=dashboard.process_pending_natural_language_actions,
+                    timeout_s=args.natural_language_timeout_s,
+                )
+            command_result = {
+                "instruction": args.initial_command,
+                "plan": submission.validated.plan.model_dump(mode="json"),
+                "executed": submission.executed,
+                "results": list(submission.results),
+                "video": (
+                    None
+                    if args.record_prompt_video is None
+                    else str(args.record_prompt_video.expanduser().resolve())
+                ),
+            }
+            if submission.executed and args.record_prompt_video is None:
+                _configure_decon_room_camera(stage)
         return {
             "success": True,
             "mode": "interactive",

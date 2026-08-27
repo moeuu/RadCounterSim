@@ -818,12 +818,40 @@ class RadCounterDashboard:
             )
         )
 
+    def set_natural_language_input(self, value: str) -> None:
+        """Update the visible operator field without synthesizing keyboard input."""
+
+        self._command_input.set_value(value)
+
+    def show_building_overview(self) -> None:
+        """Select the existing low-cost overview camera for scripted demonstrations."""
+
+        self._robot_monitor.overview()
+
     async def _interpret_natural_language(
         self,
         instruction: str,
         *,
         duplicate_removed: bool = False,
     ) -> None:
+        try:
+            await self.interpret_natural_language_instruction(
+                instruction,
+                duplicate_removed=duplicate_removed,
+            )
+        except Exception:
+            # The public method records the operator-facing error before
+            # re-raising. Button callbacks must not leave an unobserved task.
+            return
+
+    async def interpret_natural_language_instruction(
+        self,
+        instruction: str,
+        *,
+        duplicate_removed: bool = False,
+    ):
+        """Interpret one instruction while updating the same visible UI as the button."""
+
         self._set_command_busy(True)
         prefix = "Duplicate input was reduced to one copy. " if duplicate_removed else ""
         self._command_status.set_value(f"{prefix}Interpreting with the local model...")
@@ -842,13 +870,24 @@ class RadCounterDashboard:
                 self._command_cancel_button.enabled = True
         except Exception as exc:
             self._command_status.set_value(f"Command rejected: {type(exc).__name__}: {exc}")
+            raise
         finally:
             self._command_run_button.enabled = True
+        return submission
 
     def _confirm_natural_language(self) -> None:
         self._schedule(self._execute_confirmed_natural_language())
 
     async def _execute_confirmed_natural_language(self) -> None:
+        try:
+            await self.execute_confirmed_natural_language_instruction()
+        except Exception:
+            # The public method already rendered the failure in the dashboard.
+            return
+
+    async def execute_confirmed_natural_language_instruction(self):
+        """Execute the pending plan while updating the operator-facing UI."""
+
         self._set_command_busy(True)
         self._command_status.set_value("Executing confirmed operation...")
         try:
@@ -857,10 +896,12 @@ class RadCounterDashboard:
             self._command_status.set_value(self._format_command_completion(submission))
         except Exception as exc:
             self._command_status.set_value(f"Execution failed: {type(exc).__name__}: {exc}")
+            raise
         finally:
             self._command_run_button.enabled = True
             self._command_confirm_button.enabled = False
             self._command_cancel_button.enabled = False
+        return submission
 
     def _cancel_natural_language(self) -> None:
         self._natural_language.cancel()

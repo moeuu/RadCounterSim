@@ -18,6 +18,7 @@ from scripts.run_gui_validation import (
     _arguments,
     _complex_process_audit,
     _GuiFrameRateLimiter,
+    _type_visible_instruction,
 )
 
 SURFACE = "/World/RemoteDeconFacility/DeconWorkSurface"
@@ -232,6 +233,69 @@ def test_gui_fps_limit_is_configurable_and_rejects_negative_values() -> None:
         _arguments(["--max-fps", "-1"])
     with pytest.raises(SystemExit):
         _arguments(["--max-fps", "nan"])
+
+
+def test_prompt_video_requires_visible_confirmed_interactive_command() -> None:
+    output = "artifacts/video/prompt.mp4"
+    args = _arguments(
+        [
+            "--interactive",
+            "--initial-command",
+            "Decontaminate the wall.",
+            "--confirm-initial-command",
+            "--record-prompt-video",
+            output,
+            "--record-monitor-x",
+            "3840",
+        ]
+    )
+    assert str(args.record_prompt_video) == output
+    assert args.record_monitor_x == 3840
+    assert args.prompt_typing_delay_s == pytest.approx(0.04)
+
+    for invalid in (
+        ["--record-prompt-video", output],
+        ["--interactive", "--record-prompt-video", output],
+        [
+            "--interactive",
+            "--initial-command",
+            "Decontaminate the wall.",
+            "--record-prompt-video",
+            output,
+        ],
+    ):
+        with pytest.raises(SystemExit):
+            _arguments(invalid)
+
+
+def test_visible_prompt_typing_updates_only_the_dashboard_model() -> None:
+    class FakeApp:
+        def __init__(self) -> None:
+            self.updates = 0
+
+        def update(self) -> None:
+            self.updates += 1
+
+    class FakeDashboard:
+        def __init__(self) -> None:
+            self.values: list[str] = []
+
+        def set_natural_language_input(self, value: str) -> None:
+            self.values.append(value)
+
+    app = FakeApp()
+    dashboard = FakeDashboard()
+    sleeps: list[float] = []
+    _type_visible_instruction(
+        app,
+        dashboard,
+        "robot",
+        character_delay_s=0.03,
+        sleeper=sleeps.append,
+    )
+    assert dashboard.values == ["", "r", "ro", "rob", "robo", "robot"]
+    assert app.updates == len(dashboard.values)
+    assert sleeps == [0.03] * 5
 
 
 def test_gui_frame_limiter_accounts_for_update_time() -> None:
