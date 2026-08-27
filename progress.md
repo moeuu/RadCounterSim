@@ -1,4 +1,4 @@
-Original prompt: プロンプトを入力すると、そのプロンプト通りにシミュレーションが進む様子を動画にしてほしい　シミュレーション画面だけじゃなくてプロンプトが入力される様子も画面にうつして動画にして　カメラのうごかし方も工夫してロボットが何をしているのかわかりやすい動画を作成して
+Original prompt: Create a video showing the simulation following an entered prompt. Include the visible prompt-entry process as well as the simulation, and use camera movements that make the robot's actions easy to understand.
 
 - 2026-08-24: Read the canonical surface-source/decontamination authoring rules and the existing GUI/video capture implementations.
 - Recording goal: show real prompt entry and confirmation, then use overview/follow/work views so the robot and irregular wall treatment remain legible.
