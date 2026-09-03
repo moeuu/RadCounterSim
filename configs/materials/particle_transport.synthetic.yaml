@@ -1,0 +1,44 @@
+schema_version: 1
+data_status: synthetic_validation_only
+open_medium_material_id: air
+neutron_removal_m_inv:
+  concrete:
+    energies_kev: [0.00001, 0.001, 1.0, 1000.0, 10000.0]
+    values: [18.0, 16.0, 13.0, 9.0, 7.0]
+  lead:
+    energies_kev: [0.00001, 0.001, 1.0, 1000.0, 10000.0]
+    values: [6.0, 5.5, 4.5, 3.5, 3.0]
+  steel:
+    energies_kev: [0.00001, 0.001, 1.0, 1000.0, 10000.0]
+    values: [12.0, 11.0, 9.0, 7.0, 5.5]
+charged_particle_range_m:
+  alpha:
+    air:
+      energies_kev: [1000.0, 3000.0, 5500.0, 8000.0]
+      values: [0.008, 0.020, 0.040, 0.065]
+    concrete:
+      energies_kev: [1000.0, 3000.0, 5500.0, 8000.0]
+      values: [0.000002, 0.000009, 0.000020, 0.000032]
+    lead:
+      energies_kev: [1000.0, 3000.0, 5500.0, 8000.0]
+      values: [0.000001, 0.000004, 0.000009, 0.000015]
+    steel:
+      energies_kev: [1000.0, 3000.0, 5500.0, 8000.0]
+      values: [0.0000015, 0.000006, 0.000014, 0.000023]
+  beta:
+    air:
+      energies_kev: [50.0, 200.0, 500.0, 1000.0, 2500.0]
+      values: [0.02, 0.20, 1.0, 3.0, 10.0]
+    concrete:
+      energies_kev: [50.0, 200.0, 500.0, 1000.0, 2500.0]
+      values: [0.00001, 0.00008, 0.00030, 0.00075, 0.0022]
+    lead:
+      energies_kev: [50.0, 200.0, 500.0, 1000.0, 2500.0]
+      values: [0.000004, 0.00003, 0.00012, 0.00030, 0.00090]
+    steel:
+      energies_kev: [50.0, 200.0, 500.0, 1000.0, 2500.0]
+      values: [0.000006, 0.00005, 0.00020, 0.00050, 0.00150]
+provenance:
+  source: deterministic software-validation fixture; not measurement data
+  calibration_method: synthetic attenuation and range-kernel exercise
+  measured_date: '2026-08-29'

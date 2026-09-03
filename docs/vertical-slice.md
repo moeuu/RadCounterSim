@@ -1,6 +1,17 @@
 # Executable vertical slice
 
-`assets/environments/radcounter_vertical_slice.usda` is the minimum end-to-end research scene. It contains a room, a triangle activity-map surface, one estimator-hidden movable point source, a measurement robot, a countermeasure robot, a lead shield, a movable steel obstacle, a decontamination tool, four validation stations, and a disposal zone.
+`assets/environments/radcounter_vertical_slice.usda` is the minimum end-to-end
+research scene. It contains a room, a 48 x 28 candidate-field irregular surface
+source with 497 active cells and 994 activity-bearing visible triangles, one
+estimator-hidden movable point source, a measurement robot, a countermeasure
+robot, a lead shield, a movable steel obstacle, a decontamination tool, four
+validation stations, and an open-top, material-tagged lead storage enclosure
+with a separately authored disposal-volume marker. Objects delivered to that
+zone remain present as radiation sources; attenuation is produced by the same
+visible storage walls used by the Embree model. Source deactivation is reserved
+for a zone explicitly declared outside the evaluation domain. Holes, ragged
+boundaries, and detached deposits are retained; there is no rectangular
+contamination proxy.
 
 The portable stage keeps lightweight robot placeholders so it can be inspected
 without Isaac assets. `scripts/run_gui.py` replaces those placeholders before

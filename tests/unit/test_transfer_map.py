@@ -19,7 +19,7 @@ def _model_and_detector() -> tuple[SampledRadiationForwardModel, DetectorSpec]:
         "dose",
         np.array([0.0, 200.0]),
         np.array([1.0, 100.0, 200.0]),
-        np.array([1.0, 1.0, 1.0]),
+        np.ones((3, 1)),
         np.array([0.0]),
         dose_conversion_sv_h_per_cps=np.array([1.0e-9]),
     )

@@ -1,6 +1,20 @@
+schema_version: 1
 material_id: steel
-data_status: requires_validated_xcom_export
-provenance: NIST XCOM values must be exported and versioned before research use
-energies_keV: [100.0, 500.0, 1000.0]
-linear_attenuation_m_inv: [0.0, 0.0, 0.0]
+data_status: authoritative_reference
+provenance:
+  source_name: NIST X-Ray Mass Attenuation Coefficients, Iron Z=26 and Carbon Z=6
+  source_urls:
+    - https://physics.nist.gov/PhysRefData/XrayMassCoef/ElemTab/z26.html
+    - https://physics.nist.gov/PhysRefData/XrayMassCoef/ElemTab/z06.html
+  database_version: XAAMDI online tables
+  retrieved_on: 2026-08-29
+  density_g_cm3: 7.850
+  composition_mass_fraction: {Fe: 0.98, C: 0.02}
+  composition_note: explicit reference carbon-steel mixture for this simulator; not every steel grade
+  conversion: mass-fraction weighting followed by density_g_cm3 * 100
+  valid_energy_range_keV: [100.0, 1500.0]
+  payload_sha256: d6e191c4364a58ccc39faec4844ef00793351a6842baa860884884a1e1de7c92
+energies_keV: [100.0, 150.0, 200.0, 300.0, 400.0, 500.0, 600.0, 800.0, 1000.0, 1250.0, 1500.0]
+mass_attenuation_cm2_g: [0.367294, 0.195166, 0.145538, 0.109834, 0.0940292, 0.0842002, 0.0771108, 0.0670654, 0.0600232, 0.053568, 0.0488892]
+linear_attenuation_m_inv: [288.32579, 153.20531, 114.24733, 86.21969, 73.812922, 66.097157, 60.531978, 52.646339, 47.118212, 42.05088, 38.378022]
 geometry_mode: solid

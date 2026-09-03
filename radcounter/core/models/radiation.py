@@ -127,31 +127,53 @@ class MaterialSpec:
 
 @dataclass(frozen=True)
 class DetectorSpec:
-    """Energy-binned detector response and electronics model."""
+    """Energy-binned effective-area response and electronics model.
+
+    ``effective_area_m2_per_bin`` maps incident particle fluence rate at each
+    response energy to an output count-rate spectrum.  Keeping the response in
+    square metres makes the forward-model units explicit::
+
+        particles / (m2 s) * effective area (m2) = counts / s
+
+    A row may distribute one incident energy across several output bins, so the
+    same representation covers integral counters and spectrometers without a
+    detector-specific transport path.
+    """
 
     detector_id: str
     energy_bin_edges_keV: FloatArray
-    efficiency_energy_keV: FloatArray
-    intrinsic_efficiency: FloatArray
+    response_energy_keV: FloatArray
+    effective_area_m2_per_bin: FloatArray
     background_cps_per_bin: FloatArray
     dead_time_s: float = 0.0
     dose_conversion_sv_h_per_cps: FloatArray | None = None
 
     def __post_init__(self) -> None:
+        if not self.detector_id:
+            raise ValueError("detector_id is required")
         edges = _float_array(self.energy_bin_edges_keV, ndim=1, name="energy_bin_edges_keV")
-        energy = _float_array(self.efficiency_energy_keV, ndim=1, name="efficiency_energy_keV")
-        efficiency = _float_array(self.intrinsic_efficiency, ndim=1, name="intrinsic_efficiency")
+        energy = _float_array(self.response_energy_keV, ndim=1, name="response_energy_keV")
+        response = _float_array(
+            self.effective_area_m2_per_bin,
+            ndim=2,
+            name="effective_area_m2_per_bin",
+        )
         background = _float_array(
             self.background_cps_per_bin, ndim=1, name="background_cps_per_bin"
         )
         if len(edges) < 2 or np.any(np.diff(edges) <= 0):
             raise ValueError("energy bin edges must be strictly increasing")
-        if energy.shape != efficiency.shape or len(energy) < 2 or np.any(np.diff(energy) <= 0):
-            raise ValueError("efficiency grids must match and increase")
+        if len(energy) < 2 or np.any(energy <= 0) or np.any(np.diff(energy) <= 0):
+            raise ValueError("detector response energies must be positive and strictly increasing")
+        if response.shape != (len(energy), len(edges) - 1):
+            raise ValueError(
+                "effective-area response must have shape "
+                "(response_energy_count, energy_bin_count)"
+            )
         if background.shape != (len(edges) - 1,):
             raise ValueError("background must have one value per energy bin")
-        if np.any(efficiency < 0) or np.any(efficiency > 1) or np.any(background < 0):
-            raise ValueError("efficiency must be in [0,1] and background nonnegative")
+        if np.any(response < 0) or np.any(background < 0):
+            raise ValueError("effective area and background must be nonnegative")
         if self.dead_time_s < 0:
             raise ValueError("dead_time_s must be nonnegative")
         conversion = self.dose_conversion_sv_h_per_cps
@@ -160,8 +182,8 @@ class DetectorSpec:
             if conversion.shape != background.shape or np.any(conversion < 0):
                 raise ValueError("dose conversion must be nonnegative and match bins")
         object.__setattr__(self, "energy_bin_edges_keV", edges)
-        object.__setattr__(self, "efficiency_energy_keV", energy)
-        object.__setattr__(self, "intrinsic_efficiency", efficiency)
+        object.__setattr__(self, "response_energy_keV", energy)
+        object.__setattr__(self, "effective_area_m2_per_bin", response)
         object.__setattr__(self, "background_cps_per_bin", background)
         object.__setattr__(self, "dose_conversion_sv_h_per_cps", conversion)
 
@@ -171,17 +193,32 @@ class DetectorSpec:
 
         return len(self.energy_bin_edges_keV) - 1
 
-    def efficiency_at(self, energy_keV: float) -> float:
-        """Interpolate intrinsic full-energy response."""
+    def effective_area_m2_at(self, energy_keV: float) -> FloatArray:
+        """Interpolate the effective-area output vector for one incident energy.
 
-        return float(
-            np.interp(
-                energy_keV,
-                self.efficiency_energy_keV,
-                self.intrinsic_efficiency,
-                left=0.0,
-                right=0.0,
+        Response data are not extrapolated.  Callers must provide a detector
+        dataset covering every modeled emission energy; otherwise evaluation
+        fails explicitly instead of silently clamping or inventing a response.
+        """
+
+        if not np.isfinite(energy_keV):
+            raise ValueError("incident energy must be finite")
+        if energy_keV < self.response_energy_keV[0] or energy_keV > self.response_energy_keV[-1]:
+            raise ValueError(
+                f"incident energy {energy_keV:g} keV is outside detector "
+                f"response range [{self.response_energy_keV[0]:g}, "
+                f"{self.response_energy_keV[-1]:g}] keV"
             )
+        return np.asarray(
+            [
+                np.interp(
+                    energy_keV,
+                    self.response_energy_keV,
+                    self.effective_area_m2_per_bin[:, bin_index],
+                )
+                for bin_index in range(self.energy_bin_count)
+            ],
+            dtype=np.float64,
         )
 
 

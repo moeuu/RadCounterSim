@@ -11,7 +11,7 @@ from numpy.typing import NDArray
 from radcounter.core.models.radiation import DetectorSpec, IsotopeSpec
 from radcounter.core.radiation.backend import RayTransportBackend
 from radcounter.core.radiation.sampling import SourceSampleBatch
-from radcounter.core.radiation.scatter import NoScatterModel, ScatterModel
+from radcounter.core.radiation.scatter import PhotonBuildupModel, PrimaryOnlyPhotonModel
 
 FloatArray = NDArray[np.float64]
 
@@ -23,7 +23,7 @@ class SampleCountRatePrediction:
     count_rate_cps_per_bin: FloatArray
     direct_count_rate_cps_per_bin: FloatArray
     background_cps_per_bin: FloatArray
-    scatter_model_name: str
+    buildup_model_name: str
 
 
 class SampledRadiationForwardModel:
@@ -34,13 +34,15 @@ class SampledRadiationForwardModel:
         transport: RayTransportBackend,
         *,
         minimum_distance_m: float = 0.01,
-        scatter_model: ScatterModel | None = None,
+        buildup_model: PhotonBuildupModel | None = None,
     ) -> None:
         if minimum_distance_m <= 0:
             raise ValueError("minimum_distance_m must be positive")
         self._transport = transport
         self._minimum_distance_m = minimum_distance_m
-        self._scatter = scatter_model if scatter_model is not None else NoScatterModel()
+        self._buildup = (
+            buildup_model if buildup_model is not None else PrimaryOnlyPhotonModel()
+        )
 
     def predict_count_rate(
         self,
@@ -60,6 +62,7 @@ class SampledRadiationForwardModel:
         if source_samples.sample_count and np.max(source_samples.isotope_index) >= len(isotopes):
             raise ValueError("source sample isotope index is out of range")
         direct = np.zeros((len(positions), detector.energy_bin_count), dtype=np.float64)
+        corrected_source_rate = np.zeros_like(direct)
         for sample_index in range(source_samples.sample_count):
             activity_bq = source_samples.activity_bq[sample_index]
             if activity_bq == 0:
@@ -71,31 +74,41 @@ class SampledRadiationForwardModel:
                 np.linalg.norm(positions - origins, axis=1), self._minimum_distance_m
             )
             geometric_factor = 1.0 / (4.0 * np.pi * distance_m**2)
-            for line in isotope.emission_lines:
-                bin_index = int(
-                    np.searchsorted(detector.energy_bin_edges_keV, line.energy_keV, side="right")
-                    - 1
-                )
-                if bin_index < 0 or bin_index >= detector.energy_bin_count:
+            energies = np.asarray(
+                [line.energy_keV for line in isotope.emission_lines], dtype=np.float64
+            )
+            yields = np.asarray(
+                [line.photons_per_decay for line in isotope.emission_lines],
+                dtype=np.float64,
+            )
+            transmission = self._transport.trace_transmission(origins, positions, energies)
+            paths = self._transport.trace_path_lengths(origins, positions)
+            buildup = self._buildup.factors(paths, energies)
+            if transmission.shape != buildup.shape:
+                raise ValueError("transport and buildup result dimensions do not match")
+            primary_fluence = (
+                activity_bq
+                * yields[None, :]
+                * geometric_factor[:, None]
+                * transmission
+            )
+            corrected_fluence = primary_fluence * buildup
+            for line_index, line in enumerate(isotope.emission_lines):
+                effective_area_m2 = detector.effective_area_m2_at(line.energy_keV)
+                if not np.any(effective_area_m2) or yields[line_index] == 0.0:
                     continue
-                efficiency = detector.efficiency_at(line.energy_keV)
-                if efficiency == 0 or line.photons_per_decay == 0:
-                    continue
-                transmission = self._transport.trace_transmission(
-                    origins, positions, np.asarray([line.energy_keV], dtype=np.float64)
-                )[:, 0]
-                direct[:, bin_index] += (
-                    activity_bq
-                    * line.photons_per_decay
-                    * geometric_factor
-                    * transmission
-                    * efficiency
+                direct += (
+                    primary_fluence[:, line_index, None]
+                    * effective_area_m2[None, :]
                 )
-        source_rate = self._scatter.add_scatter(direct)
-        background = np.zeros_like(source_rate)
+                corrected_source_rate += (
+                    corrected_fluence[:, line_index, None]
+                    * effective_area_m2[None, :]
+                )
+        background = np.zeros_like(corrected_source_rate)
         if include_background:
             background[:] = detector.background_cps_per_bin[None, :]
-        total = source_rate + background
+        total = corrected_source_rate + background
         if apply_dead_time and detector.dead_time_s > 0:
             live_fraction = 1.0 / (1.0 + detector.dead_time_s * total.sum(axis=1))
             total *= live_fraction[:, None]
@@ -105,7 +118,7 @@ class SampledRadiationForwardModel:
             total,
             direct,
             background,
-            self._scatter.model_name,
+            self._buildup.model_name,
         )
 
     def build_transfer_matrix(

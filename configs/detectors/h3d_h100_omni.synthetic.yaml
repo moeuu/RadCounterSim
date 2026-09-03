@@ -1,0 +1,35 @@
+schema_version: "2.0"
+detector:
+  model_id: h3d_h100_omni
+  display_name: H3D H100 omnidirectional gamma monitor mode
+  family: gamma_imager
+  directionality: omnidirectional
+  outputs: [counts, count_rate, spectrum, dose_rate]
+  background_cps: 0.20
+  dead_time_s: 0.000001
+  dead_time_model: nonparalyzable
+  maximum_count_rate_cps: 400000
+  energy_resolution_fwhm_fraction_at_662kev: 0.011
+  energy_bin_edges_kev: [0, 50, 100, 150, 200, 250, 300, 350, 400, 450, 500, 550, 600, 650, 675, 700, 750, 800, 900, 1000, 1250, 1500, 2000, 2500, 3000]
+  dose_conversion_usv_h_per_count_kev: 0.000037
+  particle_responses:
+    - radiation_type: gamma
+      energies_kev: [50, 122, 356, 661.657, 1173, 1332, 2615, 3000]
+      effective_area_m2: [0.000040, 0.000068, 0.000064, 0.000056, 0.000040, 0.000037, 0.000022, 0.000019]
+  response_data_status: synthetic_validation_only
+  response_provenance:
+    source: H3D H100 manufacturer specifications plus synthetic response
+    calibration_method: synthetic CZT effective-area curve; not an H3D calibration dataset
+    manufacturer_specification: https://h3dgamma.com/H100Specs.pdf
+  metadata:
+    manufacturer: H3D, Inc.
+    product: H100 Gamma-Ray Imaging Spectrometer
+    product_url: https://h3dgamma.com/h100.php
+    manufacturer_specification_url: https://h3dgamma.com/H100Specs.pdf
+    radiation_fov_sr: 12.566370614359172
+    energy_range_min_kev: 50
+    energy_range_max_kev: 3000
+    czt_crystal_volume_cm3: 6
+    mass_kg: 3.2
+    enclosure_rating: IP67
+    operating_mode: omnidirectional scalar monitoring

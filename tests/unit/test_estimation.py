@@ -2,10 +2,16 @@ import ast
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from radcounter.core.estimation import (
     CandidateBasis,
+    ContinuousPointMLERefiner,
+    DeadTimePoissonEstimator,
+    DeadTimePoissonInverseProblem,
     GridPoissonSparseEstimator,
+    InverseSquarePointResponseModel,
+    PFPlusMLEEstimator,
     PoissonInverseProblem,
     SurfacePoissonTVEstimator,
     fisher_covariance,
@@ -117,3 +123,110 @@ def test_estimation_modules_do_not_reference_truth_state() -> None:
         }
         assert "TruthState" not in identifiers
         assert all("TruthState" not in name for name in imported)
+
+
+def _continuous_problem() -> tuple[
+    PoissonInverseProblem,
+    CandidateBasis,
+    InverseSquarePointResponseModel,
+    np.ndarray,
+]:
+    detector_positions = np.asarray(
+        (
+            (2.0, 0.0, 0.0),
+            (-2.0, 0.0, 0.0),
+            (0.0, 2.0, 0.0),
+            (0.0, -2.0, 0.0),
+            (0.0, 0.0, 2.0),
+            (0.0, 0.0, -2.0),
+            (2.0, 2.0, 0.0),
+            (-2.0, -2.0, 0.0),
+        )
+    )
+    model = InverseSquarePointResponseModel(
+        detector_positions,
+        np.full(len(detector_positions), 10.0),
+    )
+    true_position = np.asarray((0.23, -0.17, 0.12))
+    true_strength = 1000.0
+    background = np.full(len(detector_positions), 2.0)
+    basis = CandidateBasis.regular_grid((-0.5, 0.5, -0.5, 0.5, -0.5, 0.5), spacing_m=0.5)
+    response = np.column_stack(
+        [model.response_counts_per_bq(position) for position in basis.positions_world_m]
+    )
+    observed = background + model.response_counts_per_bq(true_position) * true_strength
+    return PoissonInverseProblem(observed, response, background), basis, model, true_position
+
+
+def test_continuous_point_mle_refines_beyond_grid_resolution() -> None:
+    problem, basis, model, true_position = _continuous_problem()
+    coarse = GridPoissonSparseEstimator(lambda_l1=0.001).fit(problem, basis)
+    refined = ContinuousPointMLERefiner(
+        model,
+        ((-0.5, 0.5), (-0.5, 0.5), (-0.5, 0.5)),
+    ).refine(problem, basis, coarse)
+    assert len(refined) == 1
+    coarse_error = np.linalg.norm(coarse.point_hypotheses[0].position_world_m - true_position)
+    refined_error = np.linalg.norm(refined[0].position_world_m - true_position)
+    assert refined[0].converged
+    assert refined_error < coarse_error * 0.01
+    assert np.isclose(refined[0].source_strength_bq, 1000.0, rtol=1e-5)
+    assert refined[0].parameter_covariance.shape == (4, 4)
+
+
+def test_particle_assisted_mle_is_reproducible_and_continuous() -> None:
+    problem, basis, model, true_position = _continuous_problem()
+    estimator = PFPlusMLEEstimator(
+        model,
+        ((-0.5, 0.5), (-0.5, 0.5), (-0.5, 0.5)),
+        particle_count=128,
+        particle_rounds=3,
+        random_seed=4,
+        grid_estimator=GridPoissonSparseEstimator(lambda_l1=0.001),
+    )
+    first = estimator.fit(problem, basis)
+    second = estimator.fit(problem, basis)
+    assert first.converged and second.converged
+    np.testing.assert_allclose(
+        first.point_hypotheses[0].position_world_m,
+        second.point_hypotheses[0].position_world_m,
+    )
+    assert np.linalg.norm(first.point_hypotheses[0].position_world_m - true_position) < 1e-4
+    assert first.diagnostics["solver"] == ("particle_exploration_plus_continuous_L-BFGS-B")
+
+
+def test_dead_time_poisson_estimator_recovers_nonlinear_activity() -> None:
+    basis = _two_candidate_basis()
+    response = np.asarray(((2.0e-5, 0.5e-5), (0.4e-5, 1.8e-5), (1.2e-5, 0.8e-5)))
+    truth = np.asarray((1.2e6, 0.7e6))
+    problem_template = DeadTimePoissonInverseProblem(
+        np.zeros(3),
+        response,
+        np.asarray((2.0, 3.0, 2.5)),
+        np.asarray((10.0, 12.0, 8.0)),
+        np.asarray((2.0e-3, 1.0e-3, 1.5e-3)),
+    )
+    problem = DeadTimePoissonInverseProblem(
+        problem_template.expected_counts(truth),
+        response,
+        problem_template.background_rate_cps,
+        problem_template.duration_s,
+        problem_template.dead_time_s,
+    )
+    estimate = DeadTimePoissonEstimator().fit(problem, basis)
+    assert estimate.converged
+    np.testing.assert_allclose(estimate.basis_activity_bq, truth, rtol=2.0e-5)
+    np.testing.assert_allclose(estimate.predicted_measurements, problem.observed_counts)
+    assert np.min(np.linalg.eigvalsh(estimate.covariance_bq2)) >= -1.0e-8
+    assert estimate.diagnostics["solver"] == ("nonparalyzable_dead_time_poisson_L-BFGS-B")
+
+
+def test_dead_time_problem_rejects_inconsistent_rows() -> None:
+    with pytest.raises(ValueError, match="rows"):
+        DeadTimePoissonInverseProblem(
+            np.ones(2),
+            np.ones((3, 1)),
+            np.ones(2),
+            np.ones(2),
+            np.zeros(2),
+        )

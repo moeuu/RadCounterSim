@@ -7,6 +7,7 @@ import argparse
 import importlib
 import json
 import math
+import os
 import sys
 import traceback
 from dataclasses import asdict, is_dataclass
@@ -14,6 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from radcounter.core.experiments import EvidenceClass
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTENSION = ROOT / "source/extensions/radcounter.isaac"
@@ -99,7 +102,7 @@ class _Panel:
         self._ui = ui
         self.phase = ui.SimpleStringModel("Loading real robot assets")
         self.detail = ui.SimpleStringModel("Ridgeback+Franka / Nova Carter")
-        self.window = ui.Window("RadCounterSim Real Robot Validation", width=520, height=250)
+        self.window = ui.Window("RadInterAct Real Robot Validation", width=520, height=250)
         self.window.frame.set_build_fn(self._build)
 
     def _build(self) -> None:
@@ -209,7 +212,12 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
         app.update()
     activity_path = args.artifact.parent / "workbench_activity.npz"
     create_decontamination_activity_map(activity_path)
-    author_real_robot_task_scene(stage, activity_path, config=config)
+    author_real_robot_task_scene(
+        stage,
+        activity_path,
+        ROOT / "configs/decontamination/concrete_surface.synthetic.yaml",
+        config=config,
+    )
     _configure_camera(stage)
     for _ in range(60):
         app.update()
@@ -251,9 +259,15 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
     )
     protected_path = "/World/DetectorStations/Protected"
     hidden_source_path = "/World/HiddenContaminatedDrum"
-    hidden_rate_before = simulation.expected_rates(
+    hidden_spectrum_before = simulation.expected_spectrum_components(
         detector_paths=[protected_path], source_paths=[hidden_source_path]
     )[protected_path]
+    hidden_rate_before = float(
+        np.sum(hidden_spectrum_before.corrected_source_cps_per_bin)
+    )
+    total_rate_before = float(np.sum(hidden_spectrum_before.total_cps_per_bin))
+    if hidden_rate_before <= 0.0:
+        raise AssertionError("hidden source has no positive pre-shield response")
 
     panel.update(
         "Measurement robot navigation",
@@ -322,7 +336,6 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
             treatment_axis_local=(0.0, 0.0, 1.0),
             max_contact_distance_m=0.045,
             max_surface_speed_m_s=0.35,
-            rate_constant_s_inv=1.1,
             transfer_mode="transfer_to_waste",
         ),
     )
@@ -373,9 +386,11 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
         raise AssertionError(f"physical shield placement failed: {shield_report}")
 
     simulation.synchronize()
-    hidden_rate_after = simulation.expected_rates(
+    hidden_spectrum_after = simulation.expected_spectrum_components(
         detector_paths=[protected_path], source_paths=[hidden_source_path]
     )[protected_path]
+    hidden_rate_after = float(np.sum(hidden_spectrum_after.corrected_source_cps_per_bin))
+    total_rate_after = float(np.sum(hidden_spectrum_after.total_cps_per_bin))
     attenuation_ratio = hidden_rate_after / hidden_rate_before
     if attenuation_ratio >= 0.95:
         raise AssertionError(
@@ -391,6 +406,7 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
     )
     result = {
         "success": True,
+        "evidence_class": EvidenceClass.PHYSICAL_ROBOT_EXECUTION.value,
         "assets": asset_manifest,
         "robot_models": {
             "countermeasure": "Clearpath Ridgeback + Franka Panda",
@@ -407,6 +423,14 @@ def _run(app: Any, args: argparse.Namespace, panel: _Panel) -> dict[str, Any]:
         "radiation_audit": {
             "hidden_source_rate_before_cps": hidden_rate_before,
             "hidden_source_rate_after_cps": hidden_rate_after,
+            "total_rate_before_cps": total_rate_before,
+            "total_rate_after_cps": total_rate_after,
+            "background_rate_before_cps": float(
+                np.sum(hidden_spectrum_before.background_cps_per_bin)
+            ),
+            "background_rate_after_cps": float(
+                np.sum(hidden_spectrum_after.background_cps_per_bin)
+            ),
             "attenuation_ratio": attenuation_ratio,
         },
         "motion_policy": {
@@ -443,18 +467,21 @@ def main(argv: list[str] | None = None) -> int:
         if args.keep_open:
             while app.is_running():
                 app.update()
-        return 0
-    except Exception as error:
+    except BaseException as error:
         failure = {
             "success": False,
+            "attempted_evidence_class": EvidenceClass.PHYSICAL_ROBOT_EXECUTION.value,
             "error": f"{type(error).__name__}: {error}",
             "traceback": traceback.format_exc(),
         }
         _write_json(args.artifact, failure)
         print("RADCOUNTER_REAL_ROBOT_FAIL=" + json.dumps(failure), flush=True)
-        return 1
-    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(1)
+    else:
         app.close()
+        return 0
 
 
 if __name__ == "__main__":

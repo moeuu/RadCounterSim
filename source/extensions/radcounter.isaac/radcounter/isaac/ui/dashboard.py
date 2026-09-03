@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import math
+import re
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -32,6 +34,14 @@ from radcounter.core.system_profiles import (
 )
 
 from ..runtime.simulation import IsaacRadiationSimulation, measurement_payload
+from ..visualization import (
+    ActionVisualizer,
+    DoseMapVisualizer,
+    RayDebugVisualizer,
+    ResidualVisualizer,
+    SourceEstimateVisualizer,
+)
+from ..visualization._common import author_points, set_visibility
 from .robot_monitor import RobotMonitorOverlay
 
 
@@ -72,9 +82,21 @@ class RadCounterDashboard:
         self._source_path = ui.SimpleStringModel("/World/HiddenContaminatedDrum")
         self._source_activity = ui.SimpleFloatModel(5.0e7)
         self._truth_authoring = ui.SimpleBoolModel(False)
+        self._show_truth = ui.SimpleBoolModel(False)
+        self._show_estimate = ui.SimpleBoolModel(True)
+        self._show_uncertainty = ui.SimpleBoolModel(True)
+        self._show_residual = ui.SimpleBoolModel(True)
+        self._show_action = ui.SimpleBoolModel(True)
         self._estimate = ui.SimpleStringModel("No estimator result supplied")
         self._residual = ui.SimpleStringModel("No verification residual supplied")
         self._plan = ui.SimpleStringModel("No countermeasure plan supplied")
+        self._ray_source_path = ui.SimpleStringModel("/World/ContaminatedFloor")
+        self._ray_detector_path = ui.SimpleStringModel("/World/MeasurementRobot/Detector")
+        self._ray_debug = ui.SimpleStringModel("No transport ray selected")
+        self._candidate_id = ui.SimpleStringModel("")
+        self._candidate_confirmation = ui.SimpleBoolModel(False)
+        self._experiment_baseline = ui.SimpleStringModel("risk_aware_countermeasure")
+        self._experiment_run_id = ui.SimpleStringModel("ui-evaluation")
         self._selection_file = default_selection_path()
         try:
             self._active_system_selection = load_active_selection(self._selection_file)
@@ -118,7 +140,7 @@ class RadCounterDashboard:
         self._robot_monitor.set_robot_list_changed_callback(self._rebuild_robot_list)
         self._robot_monitor.configure(self._active_system_selection)
         self._window = ui.Window(
-            "RadCounterSim Operations",
+            "RadInterAct Operations",
             width=540,
             height=1000,
             dockPreference=ui.DockPreference.RIGHT,
@@ -246,6 +268,67 @@ class RadCounterDashboard:
                 height=150,
             )
             ui.Separator(height=4)
+            ui.Label("ESTIMATION", style={"font_size": 11, "color": 0xFF6CB6FF})
+            ui.Label(
+                "Uses the estimator bound to the current workflow and public measurements.",
+                word_wrap=True,
+                style=self._operator_style(font_size=11, color=0xFFB8BDC3),
+            )
+            ui.Button(
+                "Run / update source estimate",
+                height=32,
+                clicked_fn=lambda: self._schedule(self._run_estimation()),
+            )
+            ui.Separator(height=4)
+            ui.Label("COUNTERMEASURE", style={"font_size": 11, "color": 0xFF6CB6FF})
+            with ui.HStack(height=28, spacing=8):
+                ui.Label("Candidate ID", width=100)
+                ui.StringField(self._candidate_id)
+            with ui.HStack(height=32, spacing=8):
+                ui.Button("Refresh", clicked_fn=self._select_first_candidate)
+                ui.Button(
+                    "Preview",
+                    clicked_fn=lambda: self._schedule(self._preview_selected_candidate()),
+                )
+            with ui.HStack(height=28, spacing=8):
+                ui.CheckBox(self._candidate_confirmation, width=20)
+                ui.Label("Confirm one physical execution", word_wrap=True)
+            ui.Button(
+                "Execute selected candidate",
+                height=32,
+                clicked_fn=lambda: self._schedule(self._execute_selected_candidate()),
+            )
+            ui.Separator(height=4)
+            ui.Label("VISUALIZATION", style={"font_size": 11, "color": 0xFF6CB6FF})
+            for model, label in (
+                (self._show_estimate, "Estimated sources"),
+                (self._show_uncertainty, "Source uncertainty"),
+                (self._show_residual, "Predicted / observed / normalized residual"),
+                (self._show_action, "Action route and target annotations"),
+                (self._show_truth, "Truth sources (requires authoring consent above)"),
+            ):
+                with ui.HStack(height=24, spacing=8):
+                    ui.CheckBox(model, width=20)
+                    ui.Label(label, word_wrap=True)
+            ui.Button(
+                "Apply layer visibility",
+                height=30,
+                clicked_fn=self._apply_visualization_visibility,
+            )
+            with ui.HStack(height=28, spacing=8):
+                ui.Label("Ray source", width=86)
+                ui.StringField(self._ray_source_path)
+            with ui.HStack(height=28, spacing=8):
+                ui.Label("Ray detector", width=86)
+                ui.StringField(self._ray_detector_path)
+            ui.Button("Inspect material path", height=30, clicked_fn=self._render_selected_ray)
+            _bound_label(
+                self._ray_debug,
+                self._label_subscriptions,
+                word_wrap=True,
+                height=54,
+            )
+            ui.Separator(height=4)
             ui.Label("WORKFLOW OUTPUT", style={"font_size": 11, "color": 0xFF6CB6FF})
             ui.Label("ESTIMATE", style={"font_size": 10, "color": 0xFF9FA6AD})
             _bound_label(
@@ -272,6 +355,19 @@ class RadCounterDashboard:
                 "Load latest workflow artifact",
                 height=32,
                 clicked_fn=self._load_workflow_artifact,
+            )
+            ui.Separator(height=4)
+            ui.Label("EXPERIMENT", style={"font_size": 11, "color": 0xFF6CB6FF})
+            with ui.HStack(height=28, spacing=8):
+                ui.Label("Baseline", width=86)
+                ui.StringField(self._experiment_baseline)
+            with ui.HStack(height=28, spacing=8):
+                ui.Label("Run ID", width=86)
+                ui.StringField(self._experiment_run_id)
+            ui.Button(
+                "Save evaluation snapshot",
+                height=32,
+                clicked_fn=self._save_evaluation_snapshot,
             )
             ui.Separator(height=4)
             ui.Label("COUNTERMEASURE EXECUTION", style={"font_size": 11, "color": 0xFF6CB6FF})
@@ -681,10 +777,25 @@ class RadCounterDashboard:
         self._workflow_services = None
         self._workflow_belief = None
         self._command_candidates.clear()
-        self._load_scene_button.text = f"Reload {display_name}"
+        if hasattr(self, "_load_scene_button"):
+            self._load_scene_button.text = f"Reload {display_name}"
         self._status.set_value(f"Loaded {display_name}.")
         if selection is not None:
-            self._sync_system_controls(selection)
+            if hasattr(self, "_profile_combo"):
+                self._sync_system_controls(selection)
+            else:
+                # A headless validation session does not build deferred Omni UI
+                # widgets.  Keep the selected system state authoritative without
+                # requiring controls that do not exist in that execution mode.
+                self._active_system_selection = selection
+                readiness = (
+                    "Ready" if selection.environment_ready else "Environment data unavailable"
+                )
+                self._system_summary.set_value(
+                    f"{selection.environment_entry.display_name} · "
+                    f"{selection.robot_set.display_name} · "
+                    f"{selection.detector_set.display_name}\n{readiness}"
+                )
             self._robot_monitor.configure(selection)
 
     @staticmethod
@@ -970,7 +1081,12 @@ class RadCounterDashboard:
             activity_path = create_decontamination_activity_map(
                 self.root / "artifacts/ui/runtime_dashboard_activity.npz"
             )
-            author_real_robot_task_scene(stage, activity_path, config=config)
+            author_real_robot_task_scene(
+                stage,
+                activity_path,
+                self.root / "configs/decontamination/concrete_surface.synthetic.yaml",
+                config=config,
+            )
             for _ in range(20):
                 await get_app().next_update_async()
         except Exception as exc:
@@ -1089,23 +1205,202 @@ class RadCounterDashboard:
             self._initialize_runtime()
         if self.simulation is None:
             return
-        from pxr import Gf, Sdf, UsdGeom
-
         grid = np.asarray(
             [(x, y, 0.65) for y in np.linspace(-3.4, 3.4, 18) for x in np.linspace(-5.4, 5.4, 28)]
         )
         values = self.simulation.dose_proxy_map(grid)
         stage = omni.usd.get_context().get_stage()
-        points = UsdGeom.Points.Define(stage, "/World/RadiationDoseProxy")
-        points.CreatePointsAttr([Gf.Vec3f(*position) for position in grid])
-        points.CreateDisplayColorPrimvar("vertex").Set(
-            [Gf.Vec3f(*color) for color in self._color_map(values)]
+        DoseMapVisualizer(stage).author(
+            grid,
+            values,
+            data_class="count_rate_proxy_not_dose_calibrated",
         )
-        points.CreateWidthsAttr([0.09 + 0.04 * math.log10(max(value, 1.0)) for value in values])
-        points.GetPrim().CreateAttribute(
-            "rad:visualization:dataClass", Sdf.ValueTypeNames.String, custom=True
-        ).Set("count_rate_proxy_not_dose_calibrated")
         self._status.set_value(f"Rendered {len(grid)} count-rate proxy samples.")
+
+    @staticmethod
+    def _world_position(stage: Any, path: str) -> np.ndarray:
+        from pxr import Gf, UsdGeom
+
+        prim = stage.GetPrimAtPath(path)
+        if not prim or not prim.IsValid():
+            raise ValueError(f"USD prim does not exist: {path}")
+        return np.asarray(
+            UsdGeom.XformCache().GetLocalToWorldTransform(prim).Transform(Gf.Vec3d()),
+            dtype=np.float64,
+        )
+
+    def _source_position(self, path: str) -> np.ndarray:
+        if self.simulation is None:
+            raise RuntimeError("radiation runtime is not initialized")
+        source = next(
+            (item for item in self.simulation.sources if item.prim_path == path),
+            None,
+        )
+        if source is None:
+            raise ValueError(f"runtime source does not exist: {path}")
+        total = float(np.sum(source.activity_bq))
+        if total <= 0.0:
+            raise ValueError(f"runtime source has no positive activity: {path}")
+        return np.average(source.positions_m, axis=0, weights=source.activity_bq)
+
+    def _render_selected_ray(self) -> None:
+        if self.simulation is None:
+            self._initialize_runtime()
+        if self.simulation is None:
+            return
+        stage = omni.usd.get_context().get_stage()
+        source_path = self._ray_source_path.get_value_as_string().strip()
+        detector_path = self._ray_detector_path.get_value_as_string().strip()
+        try:
+            origin = self._source_position(source_path)
+            target = self._world_position(stage, detector_path)
+            batch = self.simulation.transport.trace_path_lengths(origin[None, :], target[None, :])
+            if bool(batch.error_flags[0]):
+                raise RuntimeError("transport backend reported a ray-tracing error")
+            material_lengths = {
+                material_id: float(batch.lengths_m[0, index])
+                for index, material_id in enumerate(batch.material_ids)
+            }
+            RayDebugVisualizer(stage).author(origin, target, material_lengths)
+        except Exception as exc:
+            self._ray_debug.set_value(f"Ray inspection failed: {type(exc).__name__}: {exc}")
+            return
+        active = [
+            f"{material_id}={length:.4g} m"
+            for material_id, length in material_lengths.items()
+            if length > 0.0
+        ]
+        self._ray_debug.set_value(
+            f"{source_path} -> {detector_path}\n"
+            + (", ".join(active) if active else "no attenuating material intersections")
+        )
+        self._status.set_value("Rendered the selected finite ray and material path lengths.")
+
+    def _author_truth_overlay(self, stage: Any) -> None:
+        if self.simulation is None:
+            raise RuntimeError("radiation runtime is not initialized")
+        if not self.simulation.sources:
+            raise RuntimeError("the radiation runtime contains no source samples")
+        positions = np.concatenate([source.positions_m for source in self.simulation.sources])
+        activity = np.concatenate([source.activity_bq for source in self.simulation.sources])
+        maximum = max(float(np.max(activity)), np.finfo(np.float64).eps)
+        widths = 0.05 + 0.16 * np.sqrt(activity / maximum)
+        author_points(
+            stage,
+            "/World/RadInterActVisualization/TruthSources",
+            positions,
+            colors_rgb=np.tile((0.96, 0.12, 0.08), (len(positions), 1)),
+            widths_m=widths,
+            data_class="truth_source_debug_authorized",
+        )
+
+    def _apply_visualization_visibility(self) -> None:
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            self._status.set_value("No USD stage is open.")
+            return
+        show_truth = self._show_truth.get_value_as_bool()
+        if show_truth and not self._truth_authoring.get_value_as_bool():
+            self._show_truth.set_value(False)
+            show_truth = False
+            self._status.set_value(
+                "Truth overlay requires explicit Truth-source authoring consent."
+            )
+        if show_truth:
+            try:
+                self._author_truth_overlay(stage)
+            except Exception as exc:
+                self._show_truth.set_value(False)
+                show_truth = False
+                self._status.set_value(f"Truth overlay failed: {type(exc).__name__}: {exc}")
+        visibility = {
+            "/World/RadInterActVisualization/TruthSources": show_truth,
+            "/World/RadInterActVisualization/BeliefSources": (
+                self._show_estimate.get_value_as_bool()
+            ),
+            "/World/RadInterActVisualization/SourceUncertainty": (
+                self._show_uncertainty.get_value_as_bool()
+            ),
+            "/World/RadInterActVisualization/PredictedPostAction": (
+                self._show_residual.get_value_as_bool()
+            ),
+            "/World/RadInterActVisualization/ObservedPostAction": (
+                self._show_residual.get_value_as_bool()
+            ),
+            "/World/RadInterActVisualization/NormalizedResidual": (
+                self._show_residual.get_value_as_bool()
+            ),
+            "/World/RadInterActVisualization/Action": self._show_action.get_value_as_bool(),
+        }
+        for path, visible in visibility.items():
+            set_visibility(stage, path, visible)
+
+    def _render_action_candidate(self, candidate: Any) -> None:
+        stage = omni.usd.get_context().get_stage()
+        action = candidate.action
+        parameters = action.parameters
+        route_parts: list[list[float]] = []
+        for name in ("base_route_m", "pickup_base_route_m", "placement_base_route_m"):
+            values = parameters.get(name)
+            if isinstance(values, (list, tuple)):
+                route_parts.extend(values)
+        route = np.asarray(route_parts, dtype=np.float64) if len(route_parts) >= 2 else None
+        tool_values = parameters.get(
+            "tool_path_world_m", parameters.get("decon_tool_waypoints_world_m")
+        )
+        tool_path = None
+        if isinstance(tool_values, (list, tuple)) and len(tool_values) >= 2:
+            tool_path = np.asarray(tool_values, dtype=np.float64)
+        target = (
+            None
+            if action.target_pose_world is None
+            else np.asarray(action.target_pose_world[:3, 3], dtype=np.float64)
+        )
+        visualizer = ActionVisualizer(stage)
+        visualizer.clear()
+        visualizer.author(
+            base_route_world_m=route,
+            tool_path_world_m=tool_path,
+            target_world_m=target,
+        )
+        self._apply_visualization_visibility()
+
+    def _render_workflow_layers(self, view: Mapping[str, object]) -> None:
+        stage = omni.usd.get_context().get_stage()
+        if stage is None:
+            return
+        estimate = view.get("estimate")
+        if isinstance(estimate, Mapping):
+            positions = estimate.get("positions_world_m")
+            activity = estimate.get("source_strength_bq", estimate.get("activity_bq"))
+            uncertainty = estimate.get("activity_standard_deviation_bq")
+            if positions is not None and activity is not None:
+                SourceEstimateVisualizer(stage).author(
+                    positions,
+                    activity,
+                    activity_standard_deviation_bq=uncertainty,
+                )
+        residual = view.get("residual")
+        if isinstance(residual, Mapping):
+            paths = residual.get("detector_paths")
+            predicted = residual.get("predicted_rate_cps")
+            observed = residual.get("observed_rate_cps")
+            normalized = residual.get("normalized_residual")
+            if (
+                isinstance(paths, (list, tuple))
+                and predicted is not None
+                and observed is not None
+                and normalized is not None
+            ):
+                positions = np.asarray([self._world_position(stage, str(path)) for path in paths])
+                ResidualVisualizer(stage).author(positions, predicted, observed, normalized)
+        selected = view.get("selected_action")
+        if isinstance(selected, Mapping):
+            action_id = selected.get("action_id")
+            candidate = self._command_candidates.get(str(action_id))
+            if candidate is not None:
+                self._render_action_candidate(candidate)
+        self._apply_visualization_visibility()
 
     def _export_measurement(self) -> None:
         records = getattr(self, "_latest_records", None)
@@ -1141,6 +1436,12 @@ class RadCounterDashboard:
         self._estimate.set_value(self._compact(estimate))
         self._residual.set_value(self._compact(residual))
         self._plan.set_value(self._compact(plan))
+        try:
+            self._render_workflow_layers(view)
+        except (RuntimeError, TypeError, ValueError) as exc:
+            self._status.set_value(
+                f"Workflow visualization rejected invalid data: {type(exc).__name__}: {exc}"
+            )
 
     def _load_workflow_artifact(self) -> None:
         if not self.workflow_artifact_path.is_file():
@@ -1165,7 +1466,143 @@ class RadCounterDashboard:
         self._workflow_services = services
         self._workflow_belief = belief
         self._refresh_command_candidates()
+        self._select_first_candidate()
         self._command_status.set_value("English natural-language control is ready")
+
+    async def _run_estimation(self) -> None:
+        services = self._workflow_services
+        if services is None:
+            self._status.set_value("Bind a workflow before running estimation.")
+            return
+        try:
+            measurement = services.last_measurement
+            if not measurement:
+                measurement = await services.measure()
+            belief = await asyncio.to_thread(
+                services.estimate,
+                measurement,
+                self._workflow_belief,
+            )
+        except Exception as exc:
+            self._status.set_value(f"Estimation failed: {type(exc).__name__}: {exc}")
+            return
+        self._workflow_belief = belief
+        self.set_workflow_view(services.workflow_view())
+        self._refresh_command_candidates()
+        self._status.set_value("Updated the public source estimate and uncertainty layers.")
+
+    def _select_first_candidate(self) -> None:
+        actions = self._refresh_command_candidates()
+        feasible = next((action for action in actions if action.feasible), None)
+        self._candidate_id.set_value("" if feasible is None else feasible.action_id)
+        if feasible is None:
+            self._status.set_value("No feasible scene-derived action is available.")
+
+    def _selected_candidate(self) -> Any:
+        self._refresh_command_candidates()
+        action_id = self._candidate_id.get_value_as_string().strip()
+        candidate = self._command_candidates.get(action_id)
+        if candidate is None:
+            raise ValueError(f"candidate is not available in the current scene: {action_id}")
+        from radcounter.core.planning import DeterministicFeasibilityChecker
+
+        services = self._workflow_services
+        if services is None:
+            raise RuntimeError("workflow services are not bound")
+        report = DeterministicFeasibilityChecker().evaluate(candidate, services.resources)
+        if not report.feasible:
+            raise ValueError(f"candidate is infeasible: {action_id}: {', '.join(report.reasons)}")
+        return candidate
+
+    async def _preview_selected_candidate(self) -> None:
+        services = self._workflow_services
+        belief = self._workflow_belief
+        if services is None or belief is None:
+            self._status.set_value("Bind a workflow before previewing an action.")
+            return
+        try:
+            candidate = self._selected_candidate()
+            await asyncio.sleep(0)
+            prediction = services.preview(candidate.action, belief)
+            self._render_action_candidate(candidate)
+        except Exception as exc:
+            self._status.set_value(f"Preview failed: {type(exc).__name__}: {exc}")
+            return
+        self.set_workflow_view(services.workflow_view())
+        self._status.set_value(
+            f"Previewed {candidate.action.action_id}: {self._compact(prediction)}"
+        )
+
+    async def _execute_selected_candidate(self) -> None:
+        if not self._candidate_confirmation.get_value_as_bool():
+            self._status.set_value("Confirm one physical execution before running the action.")
+            return
+        try:
+            candidate = self._selected_candidate()
+            result = await self.execute_natural_language_step(
+                CommandStep(
+                    command=CommandName.EXECUTE_CANDIDATE,
+                    candidate_id=candidate.action.action_id,
+                )
+            )
+        except Exception as exc:
+            self._status.set_value(f"Action execution failed: {type(exc).__name__}: {exc}")
+            return
+        finally:
+            self._candidate_confirmation.set_value(False)
+        self._status.set_value(f"Physical action completed: {self._compact(result)}")
+        self._select_first_candidate()
+
+    def _save_evaluation_snapshot(self) -> None:
+        run_id = self._experiment_run_id.get_value_as_string().strip()
+        baseline = self._experiment_baseline.get_value_as_string().strip()
+        if not run_id or re.fullmatch(r"[A-Za-z0-9._-]+", run_id) is None:
+            self._status.set_value(
+                "Run ID may contain only letters, numbers, dot, dash, underscore."
+            )
+            return
+        if not baseline:
+            self._status.set_value("Experiment baseline must not be empty.")
+            return
+        stage = omni.usd.get_context().get_stage()
+        root_layer = None if stage is None else stage.GetRootLayer()
+        stage_identifier = None if root_layer is None else str(root_layer.identifier)
+        records = tuple(getattr(self, "_latest_records", ()))
+        services = self._workflow_services
+        config_digest = (
+            hashlib.sha256(self.config_path.read_bytes()).hexdigest()
+            if self.config_path.is_file()
+            else None
+        )
+        payload = {
+            "schema_version": 1,
+            "artifact_type": "operator_evaluation_snapshot",
+            "evidence_class": "configuration_and_public_observations",
+            "run_id": run_id,
+            "baseline": baseline,
+            "stage_identifier": stage_identifier,
+            "runtime_config": str(self.config_path),
+            "runtime_config_sha256": config_digest,
+            "measurements": [
+                {
+                    "detector_path": str(record.detector_path),
+                    "duration_s": float(record.duration_s),
+                    "counts": int(record.counts),
+                    "measured_rate_cps": float(record.measured_rate_cps),
+                }
+                for record in records
+            ],
+            "workflow": None if services is None else services.workflow_view(),
+        }
+        destination = self.root / "artifacts/ui/evaluations" / f"{run_id}.json"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            json.dumps(payload, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        self._status.set_value(
+            f"Saved public evaluation snapshot: {destination.relative_to(self.root)}"
+        )
 
     @staticmethod
     def _candidate_label(candidate: Any) -> str:

@@ -1,6 +1,17 @@
 """Truth-independent source estimation."""
 
 from radcounter.core.estimation.basis import BasisKind, CandidateBasis
+from radcounter.core.estimation.continuous import (
+    ContinuousPointMLERefiner,
+    ContinuousPointResponseModel,
+    InverseSquarePointResponseModel,
+    PFPlusMLEEstimator,
+    RefinedPointHypothesis,
+)
+from radcounter.core.estimation.dead_time import (
+    DeadTimePoissonEstimator,
+    DeadTimePoissonInverseProblem,
+)
 from radcounter.core.estimation.estimators import (
     GridPoissonSparseEstimator,
     PointHypothesis,
@@ -31,13 +42,20 @@ __all__ = [
     "BasisKind",
     "BeliefUpdater",
     "CandidateBasis",
+    "ContinuousPointMLERefiner",
+    "DeadTimePoissonEstimator",
+    "DeadTimePoissonInverseProblem",
+    "ContinuousPointResponseModel",
     "DeconResidualHypothesis",
     "GlobalGainBackgroundHypothesis",
     "GridPoissonSparseEstimator",
+    "InverseSquarePointResponseModel",
+    "PFPlusMLEEstimator",
     "HiddenSourceHypothesis",
     "NominalActionPreviewer",
     "PointHypothesis",
     "PoissonInverseProblem",
+    "RefinedPointHypothesis",
     "ResidualContext",
     "ResidualDiagnosis",
     "ResidualDiagnosisEngine",

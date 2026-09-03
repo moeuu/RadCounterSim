@@ -439,7 +439,12 @@ def run() -> dict[str, Any]:
     for _ in range(100):
         APP.update()
     activity_map = create_decontamination_activity_map(ARGS.output / "workbench_activity.npz")
-    author_real_robot_task_scene(stage, activity_map, config=config)
+    author_real_robot_task_scene(
+        stage,
+        activity_map,
+        ROOT / "configs/decontamination/concrete_surface.synthetic.yaml",
+        config=config,
+    )
     surface_source = author_irregular_drum_surface_source(stage)
     simplify_scene(stage)
     drum_fixing = ground_fix_drum(stage)

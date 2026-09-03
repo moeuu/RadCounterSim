@@ -1,11 +1,23 @@
+import importlib
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+import radcounter
 from radcounter.core.radiation.embree_native import (
     EmbreeNativeScene,
     TriangleMesh,
     native_embree_available,
 )
+
+ROOT = Path(__file__).resolve().parents[2]
+EXTENSION_NAMESPACE = str(ROOT / "source/extensions/radcounter.isaac/radcounter")
+if EXTENSION_NAMESPACE not in radcounter.__path__:
+    radcounter.__path__.append(EXTENSION_NAMESPACE)
+NativeStageTransport = importlib.import_module(
+    "radcounter.isaac.runtime.simulation"
+).NativeStageTransport
 
 pytestmark = pytest.mark.skipif(
     not native_embree_available(),
@@ -100,3 +112,33 @@ def test_packet_trace_handles_multiple_full_packets_and_tail() -> None:
     paths = scene.trace_path_lengths(origins, targets)
     assert paths.shape == (17, 1)
     assert paths[:, 0] == pytest.approx(np.ones(17), abs=2e-4)
+
+
+@pytest.mark.parametrize("shape", ["sphere", "cylinder"])
+def test_generated_usd_primitive_meshes_trace_outside_and_inside_paths(shape: str) -> None:
+    if shape == "sphere":
+        vertices, triangles = NativeStageTransport._sphere_mesh_values(1.0)
+    else:
+        vertices, triangles = NativeStageTransport._cylinder_mesh_values(1.0, 2.0)
+    scene = EmbreeNativeScene()
+    scene.add_mesh(TriangleMesh(vertices, triangles, 0, mesh_id=shape))
+    scene.commit()
+    paths = scene.trace_path_lengths(
+        np.array([[-2.0, 0.0, 0.0], [0.0, 0.0, 0.0]]),
+        np.array([[2.0, 0.0, 0.0], [2.0, 0.0, 0.0]]),
+    )
+    assert paths[:, 0] == pytest.approx((2.0, 1.0), abs=3e-4)
+
+
+def test_generated_sphere_respects_nonuniform_instance_transform() -> None:
+    vertices, triangles = NativeStageTransport._sphere_mesh_values(1.0)
+    transform = np.diag((2.0, 1.0, 0.5, 1.0))
+    scene = EmbreeNativeScene()
+    scene.add_mesh(
+        TriangleMesh(vertices, triangles, 0, mesh_id="ellipsoid", world_transform=transform)
+    )
+    scene.commit()
+    path = scene.trace_path_lengths(
+        np.array([[-3.0, 0.0, 0.0]]), np.array([[3.0, 0.0, 0.0]])
+    )[0, 0]
+    assert path == pytest.approx(4.0, abs=5e-4)

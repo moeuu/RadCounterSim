@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Run a repeatable shield pose-error sweep in the uv-managed Isaac runtime."""
+"""Run a kinematic shield scene-edit sensitivity sweep in Isaac Sim.
+
+This experiment deliberately edits the USD scene state.  Its artifacts cannot
+be used as evidence that a robot placed the shield.
+"""
 
 from __future__ import annotations
 
@@ -30,13 +34,17 @@ def main() -> int:
     app = SimulationApp({"headless": True})
     try:
         import omni.usd
-        from pxr import Gf
+        from radcounter.isaac.physics import Pose3D, UsdSceneStateEditor
         from radcounter.isaac.runtime.simulation import (
             IsaacRadiationSimulation,
             RuntimeConfiguration,
         )
 
-        from radcounter.core.experiments import ExperimentArtifactBundle, ExperimentCaseRecord
+        from radcounter.core.experiments import (
+            EvidenceClass,
+            ExperimentArtifactBundle,
+            ExperimentCaseRecord,
+        )
 
         stage_path = root / "assets/environments/radcounter_vertical_slice.usda"
         config_path = root / "configs/scenarios/vertical_slice.runtime.json"
@@ -46,8 +54,11 @@ def main() -> int:
             run_id,
             stage_path=stage_path,
             config_path=config_path,
+            evidence_class=EvidenceClass.KINEMATIC_SCENE_EDIT,
             metadata={
-                "experiment": "shield_pose_error_residual",
+                "experiment": "shield_scene_edit_pose_error_residual",
+                "operation_execution": EvidenceClass.KINEMATIC_SCENE_EDIT.value,
+                "supports_robot_execution_claim": False,
                 "estimator_modified": False,
                 "physics_data_class": "synthetic_validation_only",
             },
@@ -55,7 +66,9 @@ def main() -> int:
         protected = "/World/DetectorStations/Protected"
         hidden = "/World/HiddenContaminatedDrum"
         nominal = np.asarray([1.2, 0.0, 0.9])
+        identity_xyzw = np.asarray([0.0, 0.0, 0.0, 1.0])
         context = omni.usd.get_context()
+        editor = UsdSceneStateEditor()
         base_config = RuntimeConfiguration.from_json(config_path)
         for seed in range(arguments.seeds):
             if not context.open_stage(str(stage_path)):
@@ -70,8 +83,10 @@ def main() -> int:
             before = simulation.expected_rates(detector_paths=[protected], source_paths=[hidden])[
                 protected
             ]
-            shield = stage.GetPrimAtPath("/World/LeadShield")
-            shield.GetAttribute("xformOp:translate").Set(Gf.Vec3d(*nominal))
+            editor.set_geometry_pose(
+                "/World/LeadShield",
+                Pose3D(nominal, identity_xyzw),
+            )
             simulation.synchronize()
             predicted = simulation.expected_rates(
                 detector_paths=[protected], source_paths=[hidden]
@@ -80,7 +95,10 @@ def main() -> int:
             pose_error = rng.normal(0.0, arguments.translation_std_m, size=3)
             pose_error[2] = 0.0
             actual = nominal + pose_error
-            shield.GetAttribute("xformOp:translate").Set(Gf.Vec3d(*actual))
+            edit_record = editor.set_geometry_pose(
+                "/World/LeadShield",
+                Pose3D(actual, identity_xyzw),
+            )
             simulation.synchronize()
             observed_expected = simulation.expected_rates(
                 detector_paths=[protected], source_paths=[hidden]
@@ -90,10 +108,13 @@ def main() -> int:
                 ExperimentCaseRecord(
                     case_id=f"seed-{seed:05d}",
                     seed=seed,
+                    evidence_class=EvidenceClass.KINEMATIC_SCENE_EDIT,
                     parameters={
                         "shield_error_x_m": float(pose_error[0]),
                         "shield_error_y_m": float(pose_error[1]),
                         "shield_error_z_m": float(pose_error[2]),
+                        "scene_edit_revision": edit_record.revision,
+                        "operation_execution": edit_record.evidence_class.value,
                     },
                     metrics={
                         "before_cps": before,

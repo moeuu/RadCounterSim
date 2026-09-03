@@ -17,6 +17,10 @@ from typing import Any
 
 import numpy as np
 
+from radcounter.core.experiments import EvidenceClass
+
+from .disposal import apply_disposal_state, disposal_configuration
+
 FrameCallback = Callable[[float, int], None]
 NavigationProgressCallback = Callable[
     [int, tuple[float, float, float], tuple[float, float], float], None
@@ -138,6 +142,10 @@ class DecontaminationMotionReport:
     coverage_fraction: float
     waypoint_errors_m: tuple[float, ...]
     tool_path_length_m: float
+    dwell_qualified_triangle_indices: tuple[int, ...] = ()
+    dwell_pending_triangle_indices: tuple[int, ...] = ()
+    minimum_tool_dwell_s: float = 0.0
+    activity_balance_error_bq: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -195,6 +203,7 @@ class ArticulatedTaskReport:
     final_position_m: tuple[float, float, float] | None = None
     release_orientation_wxyz: tuple[float, float, float, float] | None = None
     final_orientation_wxyz: tuple[float, float, float, float] | None = None
+    evidence_class: EvidenceClass = EvidenceClass.PHYSICAL_ROBOT_EXECUTION
 
 
 def enable_real_robot_extensions() -> None:
@@ -242,6 +251,7 @@ def create_decontamination_activity_map(
         activity_bq=activity_bq,
         cumulative_treatment_exposure=np.zeros(triangle_count, dtype=np.float64),
         last_treated_step=np.full(triangle_count, -1, dtype=np.int64),
+        verified_contact_dwell_s=np.zeros(triangle_count, dtype=np.float64),
     )
     return destination
 
@@ -1011,6 +1021,37 @@ def _world_pose(stage: Any, prim_path: str) -> tuple[np.ndarray, np.ndarray]:
     return position, orientation
 
 
+def _authored_child_offset_world(stage: Any, root_path: str, child_path: str) -> np.ndarray:
+    """Return an authored child origin relative to the live rigid-body root.
+
+    PhysX may update a root and its child at different Fabric/USD boundaries.
+    The manipulation contract is the authored root-to-frame relationship, so
+    target placement must not be derived by subtracting two independently read
+    live world positions.
+    """
+
+    from pxr import Gf, UsdGeom
+
+    root = stage.GetPrimAtPath(root_path)
+    child = stage.GetPrimAtPath(child_path)
+    if not root or not root.IsValid():
+        raise RuntimeError(f"required prim does not exist: {root_path}")
+    if not child or not child.IsValid():
+        raise RuntimeError(f"required prim does not exist: {child_path}")
+    cache = UsdGeom.XformCache()
+    relative, reset_xform_stack = cache.ComputeRelativeTransform(child, root)
+    if reset_xform_stack:
+        raise RuntimeError(f"grasp frame resets its transform stack: {child_path}")
+    local_offset = relative.Transform(Gf.Vec3d())
+    root_world = cache.GetLocalToWorldTransform(root)
+    world_origin = root_world.Transform(Gf.Vec3d())
+    world_child = root_world.Transform(local_offset)
+    offset = np.asarray(world_child - world_origin, dtype=np.float64)
+    if offset.shape != (3,) or not np.all(np.isfinite(offset)):
+        raise RuntimeError(f"invalid authored grasp-frame offset: {child_path}")
+    return offset
+
+
 def _cube(
     stage: Any,
     path: str,
@@ -1330,6 +1371,7 @@ def _author_staging_lead_shield(
     for name, value_type, value in (
         ("rad:role", Sdf.ValueTypeNames.String, "shield"),
         ("rad:material:id", Sdf.ValueTypeNames.String, "lead"),
+        ("rad:material:containerOnly", Sdf.ValueTypeNames.Bool, True),
         ("rad:material:mode", Sdf.ValueTypeNames.String, "solid"),
         ("rad:shield:movable", Sdf.ValueTypeNames.Bool, True),
         ("rad:shield:resourceUnits", Sdf.ValueTypeNames.Int, 1),
@@ -1414,6 +1456,7 @@ def add_real_robot_references(
 def author_real_robot_task_scene(
     stage: Any,
     activity_map_path: str | Path,
+    treatment_model_path: str | Path,
     *,
     config: RealRobotAssetConfig | None = None,
 ) -> None:
@@ -1614,6 +1657,8 @@ def author_real_robot_task_scene(
     surface_prim = surface.GetPrim()
     activity_path = Path(activity_map_path).resolve()
     digest = hashlib.sha256(activity_path.read_bytes()).hexdigest()
+    treatment_path = Path(treatment_model_path).resolve()
+    treatment_digest = hashlib.sha256(treatment_path.read_bytes()).hexdigest()
     for name, value_type, value in (
         ("rad:role", Sdf.ValueTypeNames.String, "contaminated_surface"),
         ("rad:source:type", Sdf.ValueTypeNames.String, "surface"),
@@ -1625,8 +1670,13 @@ def author_real_robot_task_scene(
         ("rad:decon:enabled", Sdf.ValueTypeNames.Bool, True),
         ("rad:decon:activityMapUri", Sdf.ValueTypeNames.String, str(activity_path)),
         ("rad:decon:activityMapSha256", Sdf.ValueTypeNames.String, digest),
-        ("rad:decon:efficiencyMean", Sdf.ValueTypeNames.Double, 0.86),
-        ("rad:decon:efficiencyStd", Sdf.ValueTypeNames.Double, 0.08),
+        ("rad:decon:substrateMaterialId", Sdf.ValueTypeNames.String, "concrete"),
+        ("rad:decon:treatmentModelUri", Sdf.ValueTypeNames.String, str(treatment_path)),
+        (
+            "rad:decon:treatmentModelSha256",
+            Sdf.ValueTypeNames.String,
+            treatment_digest,
+        ),
         ("rad:decon:minToolDwellS", Sdf.ValueTypeNames.Double, 0.4),
         ("rad:source:irregularMask", Sdf.ValueTypeNames.Bool, True),
         ("rad:source:candidateCellCount", Sdf.ValueTypeNames.Int, cells_y * cells_z),
@@ -1678,6 +1728,7 @@ def author_real_robot_task_scene(
     for name, value_type, value in (
         ("rad:role", Sdf.ValueTypeNames.String, "shield"),
         ("rad:material:id", Sdf.ValueTypeNames.String, "lead"),
+        ("rad:material:containerOnly", Sdf.ValueTypeNames.Bool, True),
         ("rad:material:mode", Sdf.ValueTypeNames.String, "solid"),
         ("rad:shield:movable", Sdf.ValueTypeNames.Bool, True),
         ("rad:shield:resourceUnits", Sdf.ValueTypeNames.Int, 1),
@@ -1740,16 +1791,27 @@ def author_real_robot_task_scene(
             "/World/HiddenContaminatedDrum",
             "GraspFrame",
             (0.0, -0.50, 0.25),
+            (1.6, -1.8, 0.0),
+            0.90,
             2.7,
         ),
         (
             "/World/MovableObstacle",
             "ObstacleGraspFrame",
             (-0.72, 0.0, 0.12),
+            (5.2, -1.8, 0.0),
+            0.72,
             2.8,
         ),
     )
-    for object_path, frame_name, frame_offset, payload_kg in payloads:
+    for (
+        object_path,
+        frame_name,
+        frame_offset,
+        parking_offset,
+        base_stand_off_m,
+        payload_kg,
+    ) in payloads:
         object_prim = stage.GetPrimAtPath(object_path)
         if not object_prim or not object_prim.IsValid():
             # Environment catalogs may supply only the selected facility and
@@ -1763,6 +1825,24 @@ def author_real_robot_task_scene(
             "rad:manipulation:payloadKg",
             Sdf.ValueTypeNames.Double,
             payload_kg,
+        )
+        _custom_attribute(
+            object_prim,
+            "rad:manipulation:placementReference",
+            Sdf.ValueTypeNames.String,
+            "root",
+        )
+        _custom_attribute(
+            object_prim,
+            "rad:manipulation:parkingOffsetM",
+            Sdf.ValueTypeNames.Double3,
+            Gf.Vec3d(*parking_offset),
+        )
+        _custom_attribute(
+            object_prim,
+            "rad:manipulation:baseStandOffM",
+            Sdf.ValueTypeNames.Double,
+            base_stand_off_m,
         )
         frame_path = f"{object_path}/{frame_name}"
         frame = UsdGeom.Xform.Define(stage, frame_path)
@@ -2205,9 +2285,7 @@ class RidgebackFrankaController:
     ) -> DecontaminationMotionReport:
         if not hand_waypoints_m:
             raise ValueError("at least one decontamination waypoint is required")
-        planned_path = tuple(
-            tuple(map(float, waypoint[:3])) for waypoint in hand_waypoints_m
-        )
+        planned_path = tuple(tuple(map(float, waypoint[:3])) for waypoint in hand_waypoints_m)
         self._emit_progress(
             phase="approaching",
             progress=0.0,
@@ -2244,18 +2322,25 @@ class RidgebackFrankaController:
         rejected = 0
         removed = 0.0
         triangles: set[int] = set()
+        dwell_qualified: set[int] = set()
+        dwell_pending: set[int] = set()
         errors: list[float] = []
         simulation_step = 0
         tool_positions: list[np.ndarray] = []
+        activity_balance_error_bq = 0.0
 
         def treatment_tick(dt_s: float, _: int) -> None:
-            nonlocal accepted, rejected, removed, simulation_step
+            nonlocal accepted, activity_balance_error_bq, rejected, removed, simulation_step
             simulation_step += 1
             result = decontaminator.tick(dt_s, simulation_step)
             accepted += result.accepted_contacts
             rejected += result.rejected_contacts
             removed += result.removed_activity_bq
             triangles.update(result.treated_triangle_indices)
+            dwell_qualified.update(result.dwell_qualified_triangle_indices)
+            dwell_pending.update(result.dwell_pending_triangle_indices)
+            dwell_pending.difference_update(dwell_qualified)
+            activity_balance_error_bq = result.activity_balance_error_bq
             position, _ = _world_pose(self.stage, self.config.decon_tool_path)
             tool_positions.append(position)
 
@@ -2296,6 +2381,10 @@ class RidgebackFrankaController:
                     len(triangles) / max(len(decontaminator.triangle_indices), 1),
                     tuple(errors),
                     0.0,
+                    tuple(sorted(dwell_qualified)),
+                    tuple(sorted(dwell_pending)),
+                    decontaminator.minimum_tool_dwell_s,
+                    activity_balance_error_bq,
                 )
             self.hold(dwell_frames, treatment_tick)
             if author_trace_patches and accepted > contact_before:
@@ -2303,9 +2392,7 @@ class RidgebackFrankaController:
             self._emit_progress(
                 phase="decontaminating",
                 progress=float((index + 1) / len(hand_waypoints_m)),
-                coverage_fraction=(
-                    len(triangles) / max(len(decontaminator.triangle_indices), 1)
-                ),
+                coverage_fraction=(len(triangles) / max(len(decontaminator.triangle_indices), 1)),
                 accepted_contacts=accepted,
                 target_m=planned_path[index],
             )
@@ -2341,6 +2428,10 @@ class RidgebackFrankaController:
             coverage_fraction,
             tuple(errors),
             path_length,
+            tuple(sorted(dwell_qualified)),
+            tuple(sorted(dwell_pending)),
+            decontaminator.minimum_tool_dwell_s,
+            activity_balance_error_bq,
         )
 
     def execute_surface_decontamination(
@@ -2611,7 +2702,7 @@ class RidgebackFrankaController:
         grasp_path = f"{object_path.rstrip('/')}/{frame_name}"
         object_initial, _ = _world_pose(self.stage, object_path)
         grasp_position, _ = _world_pose(self.stage, grasp_path)
-        grasp_offset = grasp_position - object_initial
+        grasp_offset = _authored_child_offset_world(self.stage, object_path, grasp_path)
         open_aperture = self.set_gripper(0.035)
         phases.append("open_gripper")
         approach = grasp_position + np.asarray((0.0, 0.0, 0.14))
@@ -2815,12 +2906,16 @@ class RidgebackFrankaController:
         object_path: str,
         disposal_zone_path: str,
     ) -> ArticulatedTaskReport:
-        """Secure a physically delivered object and deactivate its source."""
+        """Apply explicit radiological disposition after physical delivery."""
 
-        from pxr import Sdf, UsdGeom
+        from pxr import UsdGeom
 
         target = self.stage.GetPrimAtPath(object_path)
         zone = self.stage.GetPrimAtPath(disposal_zone_path)
+        try:
+            disposition = disposal_configuration(self.stage, disposal_zone_path)
+        except ValueError as error:
+            return ArticulatedTaskReport("failed", False, 0, str(error), object_path)
         cache = UsdGeom.BBoxCache(
             0.0,
             [UsdGeom.Tokens.default_, UsdGeom.Tokens.render],
@@ -2849,25 +2944,20 @@ class RidgebackFrankaController:
                 ),
                 object_path,
             )
-        source_enabled = target.GetAttribute("rad:source:enabled")
-        if source_enabled:
-            source_enabled.Set(False)
-        disposed = target.GetAttribute("rad:disposal:disposed")
-        if not disposed:
-            disposed = target.CreateAttribute(
-                "rad:disposal:disposed", Sdf.ValueTypeNames.Bool, custom=True
-            )
-        disposed.Set(True)
-        for name in ("rad:manipulation:movable", "rad:manipulation:removable"):
-            attribute = target.GetAttribute(name)
-            if attribute:
-                attribute.Set(False)
+        try:
+            state_change = apply_disposal_state(self.stage, target, disposition)
+        except ValueError as error:
+            return ArticulatedTaskReport("failed", False, 0, str(error), object_path)
         self._transition("secured_in_disposal")
         return ArticulatedTaskReport(
             "complete",
             True,
             0,
-            "object secured and source disabled in disposal zone",
+            (
+                "object secured in explicit shielding; source remains present"
+                if state_change.source_present
+                else "object transferred outside the evaluation domain; source disabled"
+            ),
             object_path,
             ("secure_disposal",),
             arm_joint_excursion_rad=self.arm_joint_excursion_rad,

@@ -54,8 +54,19 @@ def _context() -> CountermeasureExecutionContext:
         shield_poses_world={"/World/Shield": _pose(-1.0)},
         disposal_zones={
             "outside": DisposalZone(
-                "outside", np.array([10.0, 0.0, 0.0]), 1.0, "deactivate_outside"
-            )
+                "outside",
+                np.array([10.0, 0.0, 0.0]),
+                1.0,
+                "out_of_evaluation_domain",
+                outside_evaluation_domain=True,
+            ),
+            "storage": DisposalZone(
+                "storage",
+                np.array([5.0, 0.0, 0.0]),
+                1.0,
+                "shielded_storage",
+                storage_prim_path="/World/ShieldedStorage",
+            ),
         },
     )
 
@@ -230,3 +241,30 @@ def test_remove_deactivates_only_after_disposal_validation() -> None:
     assert result.status == ActionStatus.COMPLETED
     assert not context.truth_state.point_sources["box-source"].enabled
     assert context.truth_state.revision.source_activity_revision == 1
+
+
+def test_remove_to_shielded_storage_keeps_source_present_at_new_pose() -> None:
+    context = _context()
+    action = CountermeasureAction(
+        "store-good",
+        ActionType.REMOVE_OBJECT,
+        "robot",
+        target_prim_path="/World/Box",
+        target_pose_world=_pose(5.0),
+        parameters={"disposal_zone_id": "storage"},
+    )
+    result = asyncio.run(
+        RemoveObjectExecutor().execute(
+            action,
+            DeterministicRobotController("robot", graspable_prims={"/World/Box"}),
+            context,
+        )
+    )
+    source = context.truth_state.point_sources["box-source"]
+    assert result.status == ActionStatus.COMPLETED
+    assert source.enabled
+    assert np.allclose(source.position_world_m, [5.0, 0.0, 0.0])
+    assert result.truth_details is not None
+    assert result.truth_details["active_stored_source_ids"] == ["box-source"]
+    assert context.truth_state.revision.source_activity_revision == 0
+    assert context.truth_state.revision.source_pose_revision == 1

@@ -5,7 +5,7 @@ runtime:
   output_directory: outputs
 radiation:
   transport_backend: analytic
-  scatter_model: none
+  scatter_model: primary_only
   minimum_distance_m: 0.01
 isotopes:
   - isotope_id: synthetic-500
@@ -22,8 +22,11 @@ point_sources:
 detector:
   detector_id: omni-1
   energy_bin_edges_keV: [0.0, 400.0, 600.0, 1000.0]
-  efficiency_energy_keV: [1.0, 500.0, 1000.0]
-  intrinsic_efficiency: [0.1, 0.1, 0.05]
+  response_energy_keV: [1.0, 500.0, 1000.0]
+  effective_area_m2_per_bin:
+    - [0.0010, 0.0, 0.0]
+    - [0.0, 0.0010, 0.0]
+    - [0.0, 0.0, 0.0005]
   background_cps_per_bin: [0.1, 0.2, 0.1]
   dead_time_s: 0.000001
 measurement_poses:

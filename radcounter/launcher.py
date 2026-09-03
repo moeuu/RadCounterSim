@@ -14,7 +14,7 @@ def main() -> int:
     launcher = repository_root / "scripts/run_app.sh"
     if not launcher.is_file():
         raise FileNotFoundError(
-            f"RadCounterSim application launcher is missing: {launcher}; "
+            f"RadInterAct application launcher is missing: {launcher}; "
             "set RADCOUNTER_APP_ROOT to the release directory"
         )
     os.execvpe(

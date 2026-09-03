@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import math
 import subprocess
@@ -102,11 +103,20 @@ from pxr import Gf, Sdf, Usd, UsdGeom, UsdLux, UsdPhysics, UsdShade
 from radcounter.isaac.robot.input_router import IsaacRobotInputRouter
 
 from radcounter.core.robots.control import JointCommand, TwistCommand
+from radcounter.core.sensors.catalog import popular_detector_catalog
+from radcounter.core.sensors.universal import (
+    DetectorPose,
+    IncidentParticleFluence,
+    MeasurementRequest,
+    ParametricDetectorModel,
+    RadiationType,
+)
 from radcounter.core.surface_decontamination import (
     DecontaminationTool,
     SurfaceSourceGrid,
     irregular_deposition_field,
 )
+from radcounter.core.treatment import WaterJetTreatment
 from radcounter.core.water_decontamination import (
     WaterDecontaminationState,
     WaterJetSpec,
@@ -118,6 +128,9 @@ ROBOT_PATH = "/World/Arounder"
 SOURCE_PATH = "/World/ReactorBuilding/ContaminatedFloor"
 HIGH_WALL_SOURCE_PATH = "/World/ReactorBuilding/ContaminatedHighWall"
 HIGH_REACH_ROBOT_PATH = "/World/HighReach10"
+MEASUREMENT_ROBOT_PATH = "/World/H100MeasurementRover"
+H100_DETECTOR_PATH = f"{MEASUREMENT_ROBOT_PATH}/SensorMast/H100"
+H100_DETECTOR_POSITION_WORLD_M = (3.20, 2.20, 2.65)
 DT_S = 1.0 / 60.0
 HEAD_X_M = 0.95
 HEAD_NOZZLE_Z_M = -0.17
@@ -139,6 +152,8 @@ IRID_HIGH_PLACE_REFERENCE = (
     "%E3%83%96%E3%83%A9%E3%82%B9%E3%83%88%E9%99%A4%E6%9F%93%E8%A3%85%E7%BD%AE%E3%81%AE"
     "%E9%96%8B%E7%99%BA%E3%83%BB%E6%B4%BB/"
 )
+H3D_H100_REFERENCE = "https://h3dgamma.com/h100.php"
+H3D_H100_SPECIFICATION = "https://h3dgamma.com/H100Specs.pdf"
 RIDGEBACK_FRANKA_REFERENCE = (
     "https://docs.isaacsim.omniverse.nvidia.com/6.0.0/assets/usd_assets_robots.html"
 )
@@ -1327,6 +1342,130 @@ def create_high_reach_robot(stage, materials) -> dict[str, object]:
     }
 
 
+def create_h100_measurement_robot(stage, materials) -> dict[str, object]:
+    """Build a separate rover carrying an H3D H100-sized detector body."""
+
+    root = UsdGeom.Xform.Define(stage, MEASUREMENT_ROBOT_PATH)
+    root.AddTranslateOp().Set(Gf.Vec3d(3.20, 2.20, 0.0))
+    root_prim = root.GetPrim()
+    for name, value_type, value in (
+        ("rad:role", Sdf.ValueTypeNames.String, "measurement_robot"),
+        ("rad:robot:model", Sdf.ValueTypeNames.String, "RadCounter H100 Survey Rover"),
+        ("rad:robot:geometryFidelity", Sdf.ValueTypeNames.String, "reference_procedural"),
+        ("rad:robot:controller", Sdf.ValueTypeNames.String, "stationary_monitoring_pose"),
+        ("rad:measurement:independentPlatform", Sdf.ValueTypeNames.Bool, True),
+    ):
+        root_prim.CreateAttribute(name, value_type).Set(value)
+
+    add_cube(
+        stage,
+        f"{MEASUREMENT_ROBOT_PATH}/Chassis",
+        (1.10, 1.42, 0.30),
+        (0.0, 0.0, 0.38),
+        materials["blue"],
+        collision=True,
+    )
+    add_cube(
+        stage,
+        f"{MEASUREMENT_ROBOT_PATH}/EquipmentDeck",
+        (0.86, 0.92, 0.34),
+        (0.0, -0.04, 0.66),
+        materials["white"],
+    )
+    for x_m, side in ((-0.64, "Left"), (0.64, "Right")):
+        add_cube(
+            stage,
+            f"{MEASUREMENT_ROBOT_PATH}/Tracks/{side}",
+            (0.24, 1.58, 0.34),
+            (x_m, 0.0, 0.31),
+            materials["track"],
+            collision=True,
+        )
+        for y_m, axle in ((-0.52, "Rear"), (0.52, "Front")):
+            add_cylinder(
+                stage,
+                f"{MEASUREMENT_ROBOT_PATH}/Tracks/{side}/{axle}Wheel",
+                0.20,
+                0.27,
+                (x_m, y_m, 0.31),
+                materials["dark_steel"],
+                axis="X",
+            )
+
+    add_cylinder(
+        stage,
+        f"{MEASUREMENT_ROBOT_PATH}/SensorMast/Lower",
+        0.055,
+        1.35,
+        (0.0, 0.0, 1.40),
+        materials["steel"],
+    )
+    add_cylinder(
+        stage,
+        f"{MEASUREMENT_ROBOT_PATH}/SensorMast/Upper",
+        0.037,
+        0.78,
+        (0.0, 0.0, 2.31),
+        materials["dark_steel"],
+    )
+    add_cube(
+        stage,
+        f"{MEASUREMENT_ROBOT_PATH}/SensorMast/Cradle",
+        (0.36, 0.26, 0.055),
+        (0.0, 0.0, 2.54),
+        materials["dark_steel"],
+    )
+    # H3D publishes a 9.6 x 3.4 x 6.9 inch envelope.  This body keeps that
+    # physical scale; the larger cradle and mast make the small instrument
+    # legible in the wide reactor-building shot.
+    detector = add_cube(
+        stage,
+        H100_DETECTOR_PATH,
+        (0.244, 0.086, 0.175),
+        (0.0, 0.0, 2.65),
+        materials["yellow"],
+    )
+    detector_prim = detector.GetPrim()
+    for name, value_type, value in (
+        ("rad:role", Sdf.ValueTypeNames.String, "detector"),
+        ("rad:detector:id", Sdf.ValueTypeNames.String, "h100_rover"),
+        ("rad:detector:model", Sdf.ValueTypeNames.String, "h3d_h100_omni"),
+        ("rad:detector:manufacturer", Sdf.ValueTypeNames.String, "H3D, Inc."),
+        ("rad:detector:directionality", Sdf.ValueTypeNames.String, "omnidirectional"),
+        ("rad:detector:radiationFovSr", Sdf.ValueTypeNames.Double, 4.0 * math.pi),
+        ("rad:detector:energyMinKeV", Sdf.ValueTypeNames.Double, 50.0),
+        ("rad:detector:energyMaxKeV", Sdf.ValueTypeNames.Double, 3000.0),
+        ("rad:detector:cztVolumeCm3", Sdf.ValueTypeNames.Double, 6.0),
+        ("rad:detector:responseDataStatus", Sdf.ValueTypeNames.String, "synthetic_validation_only"),
+        ("rad:detector:productUrl", Sdf.ValueTypeNames.String, H3D_H100_REFERENCE),
+        ("rad:detector:specificationUrl", Sdf.ValueTypeNames.String, H3D_H100_SPECIFICATION),
+    ):
+        detector_prim.CreateAttribute(name, value_type).Set(value)
+    add_cube(
+        stage,
+        f"{MEASUREMENT_ROBOT_PATH}/SensorMast/H100FrontPanel",
+        (0.176, 0.006, 0.108),
+        (0.0, -0.046, 2.65),
+        materials["dark_steel"],
+    )
+    add_sphere(
+        stage,
+        f"{MEASUREMENT_ROBOT_PATH}/StatusBeacon",
+        0.075,
+        (0.0, -0.34, 0.91),
+        materials["green"],
+    )
+    return {
+        "measurement_robot_path": MEASUREMENT_ROBOT_PATH,
+        "measurement_robot_model": "RadCounter H100 Survey Rover",
+        "detector_path": H100_DETECTOR_PATH,
+        "detector_model": "H3D H100 Gamma-Ray Imaging Spectrometer",
+        "detector_operating_mode": "omnidirectional scalar monitoring",
+        "detector_response_data_status": "synthetic_validation_only",
+        "detector_reference_urls": [H3D_H100_REFERENCE, H3D_H100_SPECIFICATION],
+    }
+
+
 def create_work_zone(stage, materials, grid: SurfaceSourceGrid) -> None:
     half_x = grid.size_x_m * 0.5
     half_y = grid.size_y_m * 0.5
@@ -1798,7 +1937,7 @@ def operation_parameters(mode: str) -> tuple[float, float]:
 
 
 def create_water_spec(mode: str) -> WaterJetSpec:
-    pressure_mpa, coefficient = operation_parameters(mode)
+    pressure_mpa, _coefficient = operation_parameters(mode)
     return WaterJetSpec(
         flow_rate_l_min=6.0,
         pressure_mpa=pressure_mpa,
@@ -1808,13 +1947,21 @@ def create_water_spec(mode: str) -> WaterJetSpec:
         min_standoff_m=0.10,
         max_standoff_m=0.26,
         max_incidence_angle_deg=12.0,
-        removal_coefficient_m2_per_l=coefficient,
         max_surface_speed_m_s=0.006,
-        activity_capture_fraction=0.98,
         water_recovery_fraction=0.97,
-        runoff_redeposition_fraction=0.10,
         surface_water_retention_fraction=0.01,
         require_wastewater_collection=True,
+    )
+
+
+def create_water_treatment(mode: str) -> WaterJetTreatment:
+    _pressure_mpa, coefficient = operation_parameters(mode)
+    return WaterJetTreatment(
+        removal_coefficient_m2_per_l=coefficient,
+        washability_mean=1.0,
+        washability_std=0.0,
+        activity_capture_fraction=0.98,
+        runoff_redeposition_fraction=0.10,
     )
 
 
@@ -1990,6 +2137,123 @@ def _update_high_wall_visuals(stage, grid: SurfaceSourceGrid) -> None:
         prim.GetAttribute("rad:source:activityBq").Set(float(grid.activity_bq[index]))
 
 
+def _h100_incident_fluence(grid: SurfaceSourceGrid) -> tuple[IncidentParticleFluence, ...]:
+    """Transport the live wall-cell activities to the fixed H100 rover pose."""
+
+    detector_position = np.asarray(H100_DETECTOR_POSITION_WORLD_M, dtype=np.float64)
+    contributions = []
+    for index, (source_position, activity_bq) in enumerate(
+        zip(grid.centers_world_m, grid.activity_bq, strict=True)
+    ):
+        if activity_bq <= 0.0:
+            continue
+        travel = detector_position - np.asarray(source_position, dtype=np.float64)
+        distance_squared_m2 = float(np.dot(travel, travel))
+        if distance_squared_m2 <= 1e-12:
+            continue
+        direction = travel / math.sqrt(distance_squared_m2)
+        contributions.append(
+            IncidentParticleFluence(
+                radiation_type=RadiationType.GAMMA,
+                energy_kev=661.657,
+                fluence_rate_m2_s=(
+                    float(activity_bq) * 0.851 / (4.0 * math.pi * distance_squared_m2)
+                ),
+                arrival_direction_world=tuple(float(value) for value in direction),
+                source_id=f"high_wall_cell_{index:04d}_cs137",
+            )
+        )
+    return tuple(contributions)
+
+
+def _measure_h100(
+    model: ParametricDetectorModel,
+    grid: SurfaceSourceGrid,
+    frame_index: int,
+):
+    return model.measure(
+        MeasurementRequest(
+            pose=DetectorPose(
+                "h100_rover",
+                H100_DETECTOR_POSITION_WORLD_M,
+                forward_world=(0.0, 1.0, 0.0),
+            ),
+            incident_fluence=_h100_incident_fluence(grid),
+            integration_time_s=1.0,
+            rng=np.random.default_rng(20_260_903 + frame_index),
+        )
+    )
+
+
+def _ass_timestamp(seconds: float) -> str:
+    centiseconds = max(0, int(round(seconds * 100.0)))
+    hours, remainder = divmod(centiseconds, 360_000)
+    minutes, remainder = divmod(remainder, 6_000)
+    whole_seconds, centiseconds = divmod(remainder, 100)
+    return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{centiseconds:02d}"
+
+
+def _write_h100_telemetry(
+    telemetry: list[dict[str, float]],
+    *,
+    fps: int,
+    csv_path: Path,
+    subtitle_path: Path,
+) -> None:
+    fieldnames = (
+        "video_time_s",
+        "surface_activity_bq",
+        "removed_fraction",
+        "expected_count_rate_cps",
+        "observed_count_rate_cps",
+        "dose_rate_usv_h",
+    )
+    with csv_path.open("w", encoding="utf-8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(telemetry)
+
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        "PlayResX: 1280\n"
+        "PlayResY: 720\n"
+        "WrapStyle: 2\n\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
+        "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
+        "MarginR, MarginV, Encoding\n"
+        "Style: Monitor,DejaVu Sans,24,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+        "&H00000000,0,0,0,0,100,100,0,0,1,1.5,0,7,34,34,28,1\n\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+    initial_count_rate = telemetry[0]["expected_count_rate_cps"]
+    events = []
+    for frame_index, row in enumerate(telemetry):
+        start = _ass_timestamp(frame_index / fps)
+        end = _ass_timestamp((frame_index + 1) / fps - 0.011)
+        count_drop = 1.0 - row["expected_count_rate_cps"] / max(initial_count_rate, 1e-12)
+        overlay = (
+            r"{\b1\c&H53E8FF&}H3D H100  |  4PI OMNIDIRECTIONAL CS-137 MONITOR{\r}\N"
+            f"COUNT RATE   {row['expected_count_rate_cps']:8.2f} cps"
+            f"    DOSE RATE   {row['dose_rate_usv_h']:7.3f} uSv/h"
+            r"\N"
+            f"SURFACE ACTIVITY   {row['surface_activity_bq']:,.0f} Bq"
+            f"    REMOVED   {row['removed_fraction'] * 100.0:5.1f}%"
+            r"\N"
+            f"LIVE RESPONSE DROP   {max(0.0, count_drop) * 100.0:5.1f}%"
+            r"    RESPONSE: SYNTHETIC / BODY + 4PI FOV: H100 SPEC"
+        )
+        events.append(f"Dialogue: 0,{start},{end},Monitor,,0,0,0,,{overlay}")
+    subtitle_path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
+
+
+def _ffmpeg_filter_path(path: Path) -> str:
+    return str(path.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
+
+
 def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGrid) -> dict:
     duration_s = float(ARGS.video_seconds)
     fps = int(ARGS.video_fps)
@@ -1998,7 +2262,10 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
     frame_dir.mkdir(parents=True, exist_ok=True)
     for stale_frame in frame_dir.glob("frame_*.png"):
         stale_frame.unlink()
-    video_path = ARGS.output / "high_reach_wall_decontamination_20s.mp4"
+    duration_label = f"{duration_s:g}".replace(".", "p")
+    video_path = ARGS.output / f"high_reach_decontamination_with_h100_{duration_label}s.mp4"
+    telemetry_path = ARGS.output / "h100_measurements.csv"
+    subtitle_path = ARGS.output / ".h100_measurement_hud.ass"
     video_path.unlink(missing_ok=True)
 
     set_camera_view(
@@ -2017,6 +2284,8 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
         max_surface_speed_m_s=3.0,
     )
     initial_activity_bq = grid.total_activity_bq
+    h100_model = ParametricDetectorModel(popular_detector_catalog()["h3d_h100_omni"])
+    telemetry: list[dict[str, float]] = []
     previous_target = np.asarray(_high_reach_scan_target(0.0, duration_s), dtype=np.float64)
     active_start_s = min(1.5, duration_s * 0.10)
     active_end_s = duration_s - min(2.0, duration_s * 0.12)
@@ -2040,6 +2309,19 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
                 dt_s=5.0 / fps,
             )
             _update_high_wall_visuals(stage, grid)
+        h100_reading = _measure_h100(h100_model, grid, frame_index)
+        telemetry.append(
+            {
+                "video_time_s": video_time_s,
+                "surface_activity_bq": grid.total_activity_bq,
+                "removed_fraction": grid.removed_fraction,
+                "expected_count_rate_cps": h100_reading.expected_count_rate_cps,
+                "observed_count_rate_cps": (
+                    h100_reading.observed_counts / h100_reading.integration_time_s
+                ),
+                "dose_rate_usv_h": h100_reading.dose_rate_usv_h,
+            }
+        )
         previous_target = target_local
         world.step(render=True)
         request_capture(frame_dir / f"frame_{frame_index:04d}.png")
@@ -2061,6 +2343,17 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
         rendered_frames = len(list(frame_dir.glob("frame_*.png")))
     if rendered_frames != frame_count:
         raise RuntimeError(f"expected {frame_count} video frames, found {rendered_frames}")
+    _write_h100_telemetry(
+        telemetry,
+        fps=fps,
+        csv_path=telemetry_path,
+        subtitle_path=subtitle_path,
+    )
+    video_filter = (
+        "crop=1440:810:0:45,scale=1280:720,"
+        "drawbox=x=18:y=16:w=1244:h=142:color=black@0.62:t=fill,"
+        f"subtitles=filename='{_ffmpeg_filter_path(subtitle_path)}',format=yuv420p"
+    )
     subprocess.run(
         [
             "ffmpeg",
@@ -2072,7 +2365,7 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
             "-i",
             str(frame_dir / "frame_%04d.png"),
             "-vf",
-            "crop=1440:810:0:45,scale=1280:720,format=yuv420p",
+            video_filter,
             "-r",
             "30",
             "-c:v",
@@ -2090,6 +2383,7 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
     for rendered_frame in frame_dir.glob("frame_*.png"):
         rendered_frame.unlink()
     frame_dir.rmdir()
+    subtitle_path.unlink(missing_ok=True)
     return {
         "passed": True,
         "video": str(video_path),
@@ -2101,6 +2395,16 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
         "initial_activity_bq": initial_activity_bq,
         "final_activity_bq": grid.total_activity_bq,
         "removed_fraction": grid.removed_fraction,
+        "measurement_robot": MEASUREMENT_ROBOT_PATH,
+        "detector_model_id": "h3d_h100_omni",
+        "detector_operating_mode": "omnidirectional scalar monitoring",
+        "detector_response_data_status": "synthetic_validation_only",
+        "initial_expected_count_rate_cps": telemetry[0]["expected_count_rate_cps"],
+        "final_expected_count_rate_cps": telemetry[-1]["expected_count_rate_cps"],
+        "initial_dose_rate_usv_h": telemetry[0]["dose_rate_usv_h"],
+        "final_dose_rate_usv_h": telemetry[-1]["dose_rate_usv_h"],
+        "measurement_telemetry_csv": str(telemetry_path),
+        "transport_model": "per-cell Cs-137 yield and inverse-square fluence",
         "surface_source": HIGH_WALL_SOURCE_PATH,
         "decontamination_model": "contact-footprint cumulative-exposure decay",
     }
@@ -2134,6 +2438,7 @@ def main() -> int:
         if high_reach_render:
             grid = create_high_wall_surface_source(stage)
             robot_manifest = create_high_reach_robot(stage, materials)
+            measurement_manifest = create_h100_measurement_robot(stage, materials)
             world.reset()
             if ARGS.render_video:
                 video_result = render_high_reach_decontamination_video(world, stage, grid)
@@ -2142,6 +2447,7 @@ def main() -> int:
                     "scene": "13 m reactor-building high-wall decontamination",
                     "reference_robot": "RadCounter HighReach-10 research design",
                     **robot_manifest,
+                    **measurement_manifest,
                 }
                 print("HIGH_REACH_VIDEO_RESULT " + json.dumps(result), flush=True)
                 return 0
@@ -2169,6 +2475,7 @@ def main() -> int:
                 "surface_orientation": "vertical wall",
                 "active_surface_cells": int(np.count_nonzero(grid.activity_bq)),
                 "maximum_contamination_height_m": 10.45,
+                **measurement_manifest,
                 "image": str(high_reach_path),
             }
             print("HIGH_REACH_RENDER_RESULT " + json.dumps(result), flush=True)
@@ -2220,6 +2527,7 @@ def main() -> int:
         water_process = WaterSurfaceDecontaminator(
             grid,
             water_state,
+            create_water_treatment(ARGS.operation_mode),
             washability=grid.efficiency,
             runoff_direction_world_xy=(0.0, -1.0),
         )

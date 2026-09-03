@@ -1,0 +1,14 @@
+schema_version: 1
+isotope_id: Cs-137
+data_status: authoritative_reference
+provenance:
+  source_name: NNDC Nuclear Wallet Cards and ENSDF 137Cs beta decay evaluation
+  source_urls:
+    - https://www.nndc.bnl.gov/walletcards/doc/radioactive_booklet.pdf
+    - https://www.nndc.bnl.gov/ensnds/137/Ba/beta_decay.pdf
+  retrieved_on: 2026-08-29
+  intensity_basis: photons per 100 parent decays converted to photons per decay
+  payload_sha256: 1a48cd3cd854d1ef66bd01b773c31ba17762a5ec43c8ed64cc6ac4d2a64e9199
+emission_lines:
+  - energy_keV: 661.657
+    photons_per_decay: 0.851

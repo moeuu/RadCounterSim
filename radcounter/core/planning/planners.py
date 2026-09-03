@@ -117,6 +117,45 @@ class RandomPlanner:
         return _decision(self.planner_id, selected, scores, rejected)
 
 
+class RiskAwareCountermeasurePlanner:
+    """Rank feasible actions by mean cost and the upper-tail outcome penalty."""
+
+    planner_id = "risk_aware_countermeasure"
+
+    def __init__(self, *, tail_probability: float = 0.1, risk_aversion: float = 1.0) -> None:
+        if not 0.0 < tail_probability <= 1.0:
+            raise ValueError("tail_probability must be in (0, 1]")
+        if risk_aversion < 0.0:
+            raise ValueError("risk_aversion must be nonnegative")
+        self._tail_probability = tail_probability
+        self._risk_aversion = risk_aversion
+
+    def _score(self, candidate: ActionCandidate, context: PlanningContext) -> float:
+        if candidate.outcome_samples is None:
+            return context.weights.score(candidate.metrics)
+        samples = np.asarray(
+            candidate.outcome_samples.objective_samples(context.weights),
+            dtype=np.float64,
+        )
+        expected = float(np.mean(samples))
+        tail_count = max(1, int(np.ceil(self._tail_probability * len(samples))))
+        upper_tail_mean = float(np.mean(np.sort(samples)[-tail_count:]))
+        return expected + self._risk_aversion * (upper_tail_mean - expected)
+
+    def plan(self, context: PlanningContext) -> PlanningDecision | None:
+        candidates, rejected = _feasible(context)
+        if not candidates:
+            return None
+        scores = {
+            candidate.action.action_id: self._score(candidate, context) for candidate in candidates
+        }
+        selected = min(
+            candidates,
+            key=lambda candidate: (scores[candidate.action.action_id], candidate.action.action_id),
+        )
+        return _decision(self.planner_id, selected, scores, rejected)
+
+
 class ClosedLoopResidualPlanner:
     """Full objective with ambiguity-aware preference for information actions."""
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -11,6 +12,8 @@ import numpy as np
 from radcounter.core.models.actions import ActionType, CountermeasureAction
 from radcounter.core.models.state import BeliefState
 from radcounter.core.planning.models import ActionCandidate, ActionMetrics, FeasibilityFacts
+from radcounter.core.scene import resolve_asset_uri
+from radcounter.core.treatment import load_treatment_material_model
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,7 +26,6 @@ class SceneCandidateConfig:
     disposal_zone_path: str = "/World/DisposalZone"
     end_effector_offset_m: tuple[float, float, float] = (1.2, 0.0, 0.0)
     decon_end_effector_offset_m: tuple[float, float, float] | None = None
-    object_end_effector_offset_m: tuple[float, float, float] | None = None
     mobile_clearance_m: float = 0.28
     manipulator_workspace_m: float = 1.55
     manipulator_vertical_range_m: tuple[float, float] = (-0.35, 1.15)
@@ -35,13 +37,10 @@ class SceneCandidateConfig:
     measurement_duration_s: float = 2.0
     shield_duration_s: float = 45.0
     decon_duration_s: float = 20.0
+    enable_water_jet_candidates: bool = False
+    water_flow_rate_l_min: float = 6.0
+    water_recovery_fraction: float = 0.75
     object_duration_s: float = 35.0
-    object_parking_offsets_m: tuple[tuple[float, float], ...] = (
-        (1.6, 0.0),
-        (1.6, -1.8),
-        (3.4, 0.0),
-        (3.4, -1.8),
-    )
     dose_proxy_to_sv_h: float = 1.0e-12
     # A compound CAD building may expose one collision mesh whose AABB covers
     # all of its traversable rooms.  Curated spawn anchors can opt that root
@@ -556,6 +555,8 @@ class IsaacActionCandidateGenerator:
         self.config = config or SceneCandidateConfig()
         self.probe = IsaacSceneFeasibilityProbe(stage, self.config, controller)
         self._latest: dict[str, ActionCandidate] = {}
+        self._authored_local_center_by_path: dict[str, np.ndarray] = {}
+        self._authored_grasp_from_root_by_path: dict[str, np.ndarray] = {}
 
     @staticmethod
     def _attribute(prim: Any, name: str, default: object = None) -> object:
@@ -579,10 +580,34 @@ class IsaacActionCandidateGenerator:
         return path.strip("/").replace("/", "-").lower()
 
     def _center(self, prim_or_path: Any) -> np.ndarray:
-        bounds = self.probe.bounds(prim_or_path)
-        if bounds is not None:
-            return (bounds[0] + bounds[1]) * 0.5
-        return self.probe.world_position(prim_or_path)
+        from pxr import Gf, Usd, UsdGeom
+
+        prim = (
+            self.stage.GetPrimAtPath(prim_or_path)
+            if isinstance(prim_or_path, str)
+            else prim_or_path
+        )
+        if not prim or not prim.IsValid():
+            raise ValueError(f"USD prim does not exist: {prim_or_path}")
+        if not UsdGeom.Imageable(prim):
+            return self.probe.world_position(prim)
+        path = str(prim.GetPath())
+        local_center = self._authored_local_center_by_path.get(path)
+        if local_center is None:
+            local_bound = UsdGeom.BBoxCache(
+                Usd.TimeCode.Default(), [UsdGeom.Tokens.default_]
+            ).ComputeUntransformedBound(prim)
+            aligned = local_bound.ComputeAlignedRange()
+            local_minimum = np.asarray(aligned.GetMin(), dtype=np.float64)
+            local_maximum = np.asarray(aligned.GetMax(), dtype=np.float64)
+            if not np.all(np.isfinite(local_minimum)) or not np.all(
+                np.isfinite(local_maximum)
+            ):
+                return self.probe.world_position(prim)
+            local_center = (local_minimum + local_maximum) * 0.5
+            self._authored_local_center_by_path[path] = local_center.copy()
+        matrix = UsdGeom.XformCache().GetLocalToWorldTransform(prim)
+        return np.asarray(matrix.Transform(Gf.Vec3d(*local_center)), dtype=np.float64)
 
     def _robot_position(self, robot_path: str) -> np.ndarray:
         pose_path = robot_path
@@ -591,6 +616,28 @@ class IsaacActionCandidateGenerator:
         elif robot_path == self.config.measurement_robot_path:
             pose_path = self.config.measurement_pose_path or robot_path
         return self.probe.world_position(pose_path)
+
+    def _grasp_from_root(self, object_prim: Any, frame_name: str) -> np.ndarray:
+        from pxr import Gf, UsdGeom
+
+        object_path = str(object_prim.GetPath())
+        cached = self._authored_grasp_from_root_by_path.get(object_path)
+        if cached is not None:
+            return cached.copy()
+        frame = self.stage.GetPrimAtPath(f"{object_path.rstrip('/')}/{frame_name}")
+        if not frame or not frame.IsValid():
+            raise ValueError(f"grasp frame does not exist: {object_path}/{frame_name}")
+        cache = UsdGeom.XformCache()
+        relative, _ = cache.ComputeRelativeTransform(frame, object_prim)
+        local_grasp = relative.Transform(Gf.Vec3d())
+        world = cache.GetLocalToWorldTransform(object_prim)
+        world_origin = world.Transform(Gf.Vec3d())
+        world_grasp = world.Transform(local_grasp)
+        offset = np.asarray(world_grasp - world_origin, dtype=np.float64)
+        if offset.shape != (3,) or not np.all(np.isfinite(offset)):
+            raise ValueError(f"grasp offset is invalid: {object_path}/{frame_name}")
+        self._authored_grasp_from_root_by_path[object_path] = offset.copy()
+        return offset
 
     def _public_source_samples(self, belief: BeliefState) -> tuple[np.ndarray, np.ndarray]:
         strengths_by_path: dict[str, float] = {}
@@ -809,7 +856,17 @@ class IsaacActionCandidateGenerator:
                 robot_z=float(robot[2]),
                 offset_m=self.config.decon_end_effector_offset_m,
             )
-            efficiency = float(self._attribute(prim, "rad:decon:efficiencyMean", 0.8))
+            substrate = str(self._attribute(prim, "rad:decon:substrateMaterialId", ""))
+            model_uri_value = self._attribute(prim, "rad:decon:treatmentModelUri", "")
+            model_uri = str(getattr(model_uri_value, "path", model_uri_value))
+            model_sha256 = str(self._attribute(prim, "rad:decon:treatmentModelSha256", ""))
+            layer_path = str(self.stage.GetRootLayer().realPath or "")
+            base_directory = Path(layer_path).resolve().parent if layer_path else Path.cwd()
+            treatment_model = load_treatment_material_model(
+                resolve_asset_uri(model_uri, base_directory),
+                expected_file_sha256=model_sha256,
+                expected_substrate_material_id=substrate,
+            )
             facts = self._facts(
                 object_path=None,
                 target_m=target,
@@ -822,7 +879,7 @@ class IsaacActionCandidateGenerator:
                 base,
                 moving_robot_path=self.config.countermeasure_robot_path,
             )
-            action = CountermeasureAction(
+            dry_action = CountermeasureAction(
                 action_id=f"decon-{self._safe_name(str(prim.GetPath()))}",
                 action_type=ActionType.DECONTAMINATE,
                 robot_id=self.config.countermeasure_robot_path,
@@ -847,19 +904,73 @@ class IsaacActionCandidateGenerator:
                     ),
                     "pickup_base_yaw_rad": 0.0,
                     "decon_media": self.config.decon_duration_s,
+                    "treatment_method": "dry_contact",
+                    "treatment_model_id": treatment_model.model_id,
+                    "treatment_numeric_sha256": treatment_model.numeric_sha256,
                 },
                 predicted_duration_s=self.config.decon_duration_s,
             )
             candidates.append(
                 self._candidate(
-                    action,
+                    dry_action,
                     belief,
                     facts,
                     target_m=target,
-                    remaining_fraction=max(0.0, 1.0 - efficiency),
-                    tags=frozenset({"decontamination", "scene_derived"}),
+                    remaining_fraction=max(
+                        0.0,
+                        1.0 - treatment_model.dry_contact.efficiency_mean,
+                    ),
+                    tags=frozenset({"decontamination", "dry_contact", "scene_derived"}),
                 )
             )
+            if self.config.enable_water_jet_candidates:
+                if (
+                    self.config.water_flow_rate_l_min <= 0.0
+                    or not 0.0 <= self.config.water_recovery_fraction <= 1.0
+                ):
+                    raise ValueError("water candidate configuration is invalid")
+                clean_water_l = (
+                    self.config.water_flow_rate_l_min / 60.0 * self.config.decon_duration_s
+                )
+                wastewater_l = clean_water_l * self.config.water_recovery_fraction
+                bounds = self.probe.bounds(prim)
+                if bounds is None:
+                    raise ValueError("water candidate surface has no finite bounds")
+                extents = np.sort(np.maximum(bounds[1] - bounds[0], 1.0e-6))
+                surface_area_m2 = float(extents[-1] * extents[-2])
+                removal_fraction = 1.0 - math.exp(
+                    -treatment_model.water_jet.removal_coefficient_m2_per_l
+                    * clean_water_l
+                    * treatment_model.water_jet.washability_mean
+                    / surface_area_m2
+                )
+                water_action = CountermeasureAction(
+                    action_id=f"water-decon-{self._safe_name(str(prim.GetPath()))}",
+                    action_type=ActionType.DECONTAMINATE,
+                    robot_id=self.config.countermeasure_robot_path,
+                    target_prim_path=str(prim.GetPath()),
+                    target_region={"surface_path": str(prim.GetPath())},
+                    target_pose_world=self._pose(target),
+                    parameters={
+                        **dry_action.parameters,
+                        "decon_media": 0.0,
+                        "treatment_method": "water_jet",
+                        "clean_water_l": clean_water_l,
+                        "wastewater_l": wastewater_l,
+                        "water_flow_rate_l_min": self.config.water_flow_rate_l_min,
+                    },
+                    predicted_duration_s=self.config.decon_duration_s,
+                )
+                candidates.append(
+                    self._candidate(
+                        water_action,
+                        belief,
+                        facts,
+                        target_m=target,
+                        remaining_fraction=max(0.0, 1.0 - removal_fraction),
+                        tags=frozenset({"decontamination", "water_jet", "scene_derived"}),
+                    )
+                )
         return candidates
 
     def _shield_reduction(self, shield: Any) -> float:
@@ -891,7 +1002,7 @@ class IsaacActionCandidateGenerator:
             root_from_center = shield_root - pickup
             frame_name = str(self._attribute(shield, "rad:manipulation:graspFrame", ""))
             grasp_position = self.probe.world_position(f"{shield_path.rstrip('/')}/{frame_name}")
-            grasp_from_root = grasp_position - shield_root
+            grasp_from_root = self._grasp_from_root(shield, frame_name)
             pickup_base = self._base_for_end_effector(grasp_position, robot_z=float(robot[2]))
             for fraction in self.config.shield_line_fractions:
                 target = source + fraction * (protected - source)
@@ -986,12 +1097,6 @@ class IsaacActionCandidateGenerator:
         if not zone or not zone.IsValid():
             return []
         zone_position = self._center(zone)
-        parking_paths = [
-            str(prim.GetPath())
-            for prim in self.stage.Traverse()
-            if self._attribute(prim, "rad:manipulation:graspFrame", None) is not None
-            and self._attribute(prim, "rad:role", "") != "shield"
-        ]
         candidates: list[ActionCandidate] = []
         for prim in self.stage.Traverse():
             if not bool(self._attribute(prim, "rad:manipulation:movable", False)):
@@ -999,39 +1104,82 @@ class IsaacActionCandidateGenerator:
             if self._attribute(prim, "rad:role", "") == "shield":
                 continue
             object_path = str(prim.GetPath())
-            pickup = self._center(prim)
             object_root = self.probe.world_position(prim)
-            root_from_center = object_root - pickup
+            placement_reference = str(
+                self._attribute(prim, "rad:manipulation:placementReference", "")
+            )
+            if placement_reference != "root":
+                raise ValueError(
+                    f"{object_path} requires rad:manipulation:placementReference='root'"
+                )
+            pickup_center = self._center(prim)
+            center_from_root = pickup_center - object_root
             frame_name = str(self._attribute(prim, "rad:manipulation:graspFrame", ""))
             grasp_position = self.probe.world_position(f"{object_path.rstrip('/')}/{frame_name}")
-            grasp_from_root = grasp_position - object_root
+            grasp_from_root = self._grasp_from_root(prim, frame_name)
+            try:
+                base_stand_off_m = float(
+                    self._attribute(prim, "rad:manipulation:baseStandOffM", math.nan)
+                )
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    f"{object_path} has invalid rad:manipulation:baseStandOffM"
+                ) from error
+            if not math.isfinite(base_stand_off_m) or not 0.0 < base_stand_off_m <= 0.95:
+                raise ValueError(
+                    f"{object_path} requires 0 < rad:manipulation:baseStandOffM <= 0.95"
+                )
+            object_base_offset = (base_stand_off_m, 0.0, 0.0)
             pickup_base = self._base_for_end_effector(
                 grasp_position,
                 robot_z=float(robot[2]),
-                offset_m=self.config.object_end_effector_offset_m,
+                offset_m=object_base_offset,
             )
-            parking_slot = parking_paths.index(object_path)
-            configured_offsets = self.config.object_parking_offsets_m
-            offset_index = parking_slot % len(configured_offsets)
-            offset_ring = parking_slot // len(configured_offsets)
-            offset_xy = np.asarray(configured_offsets[offset_index], dtype=np.float64)
-            offset_xy[0] += 1.8 * offset_ring
-            parking = zone_position + np.asarray((offset_xy[0], offset_xy[1], 0.0))
-            parking[2] = pickup[2]
-            parking_root = parking + root_from_center
-            placement_base = self._base_for_end_effector(
-                parking_root + grasp_from_root,
-                robot_z=float(robot[2]),
-                offset_m=self.config.object_end_effector_offset_m,
+            parking_offset = np.asarray(
+                self._attribute(prim, "rad:manipulation:parkingOffsetM", ()),
+                dtype=np.float64,
             )
-            facts = self._facts(
-                object_path=object_path,
-                target_m=parking,
-                pickup_base_m=pickup_base,
-                placement_base_m=placement_base,
-                requires_grasp=True,
-                pickup_manipulator_target_m=grasp_position,
-                placement_manipulator_target_m=parking_root + grasp_from_root,
+            if (
+                parking_offset.shape != (3,)
+                or not np.all(np.isfinite(parking_offset))
+                or abs(float(parking_offset[2])) > 1.0e-9
+            ):
+                raise ValueError(
+                    f"{object_path} requires a finite horizontal "
+                    "rad:manipulation:parkingOffsetM"
+                )
+            parking_root = zone_position + parking_offset
+            parking_root[2] = object_root[2]
+            parking_center = parking_root + center_from_root
+            parking_grasp = parking_root + grasp_from_root
+            placement_options: list[tuple[float, np.ndarray, FeasibilityFacts]] = []
+            for placement_yaw in (0.0, math.pi, math.pi / 2.0, -math.pi / 2.0):
+                option_base = self._base_for_end_effector(
+                    parking_grasp,
+                    robot_z=float(robot[2]),
+                    yaw_rad=placement_yaw,
+                    offset_m=object_base_offset,
+                )
+                option_facts = self._facts(
+                    object_path=object_path,
+                    target_m=parking_center,
+                    pickup_base_m=pickup_base,
+                    placement_base_m=option_base,
+                    requires_grasp=True,
+                    pickup_manipulator_target_m=grasp_position,
+                    placement_manipulator_target_m=parking_grasp,
+                )
+                placement_options.append((placement_yaw, option_base, option_facts))
+            placement_yaw, placement_base, facts = next(
+                (
+                    option
+                    for option in placement_options
+                    if option[2].mobile_path_available
+                    and option[2].manipulator_reachable
+                    and option[2].collision_free
+                    and option[2].placement_stable
+                ),
+                placement_options[0],
             )
             action = CountermeasureAction(
                 action_id=f"move-{self._safe_name(object_path)}",
@@ -1051,7 +1199,7 @@ class IsaacActionCandidateGenerator:
                         carrying=True,
                     ),
                     "pickup_base_yaw_rad": 0.0,
-                    "placement_base_yaw_rad": 0.0,
+                    "placement_base_yaw_rad": placement_yaw,
                 },
                 predicted_duration_s=self.config.object_duration_s,
             )
@@ -1060,7 +1208,7 @@ class IsaacActionCandidateGenerator:
                     action,
                     belief,
                     facts,
-                    target_m=parking,
+                    target_m=parking_root,
                     remaining_fraction=(0.5 if object_path in belief.basis_ids else 1.0),
                     tags=frozenset({"object_move", "scene_derived"}),
                 )
@@ -1073,37 +1221,64 @@ class IsaacActionCandidateGenerator:
             # elevated pre-grasp outside Franka's collision-free workspace.
             # Approach from the opposite side while preserving the validated
             # 0.90 m object stand-off.
-            removal_pickup_yaw = math.pi
-            removal_pickup_base = self._base_for_end_effector(
-                grasp_position,
-                robot_z=float(robot[2]),
-                yaw_rad=removal_pickup_yaw,
-                offset_m=self.config.object_end_effector_offset_m,
-            )
-            removal_target = zone_position.copy()
-            removal_target[2] = pickup[2]
-            removal_root = removal_target + root_from_center
-            removal_yaw = math.pi
+            removal_root = zone_position.copy()
+            removal_root[2] = object_root[2]
+            removal_center = removal_root + center_from_root
             # The controller keeps the payload's world orientation fixed
             # while the base turns.  Preserve the authored grasp offset too;
             # rotating it here would send the carried drum one metre north
             # before asking the arm to move it back at the disposal zone.
             removal_grasp = removal_root + grasp_from_root
-            removal_base = self._base_for_end_effector(
-                removal_grasp,
-                robot_z=float(robot[2]),
-                yaw_rad=removal_yaw,
-                offset_m=self.config.object_end_effector_offset_m,
-            )
-            removal_facts = self._facts(
-                object_path=object_path,
-                target_m=removal_target,
-                pickup_base_m=removal_pickup_base,
-                placement_base_m=removal_base,
-                requires_grasp=True,
-                pickup_manipulator_target_m=grasp_position,
-                placement_manipulator_target_m=removal_grasp,
-                requires_disposal=True,
+            removal_options: list[
+                tuple[float, np.ndarray, float, np.ndarray, FeasibilityFacts]
+            ] = []
+            yaws = (math.pi, 0.0, math.pi / 2.0, -math.pi / 2.0)
+            for removal_pickup_yaw in yaws:
+                option_pickup_base = self._base_for_end_effector(
+                    grasp_position,
+                    robot_z=float(robot[2]),
+                    yaw_rad=removal_pickup_yaw,
+                    offset_m=object_base_offset,
+                )
+                for removal_yaw in yaws:
+                    option_removal_base = self._base_for_end_effector(
+                        removal_grasp,
+                        robot_z=float(robot[2]),
+                        yaw_rad=removal_yaw,
+                        offset_m=object_base_offset,
+                    )
+                    option_facts = self._facts(
+                        object_path=object_path,
+                        target_m=removal_center,
+                        pickup_base_m=option_pickup_base,
+                        placement_base_m=option_removal_base,
+                        requires_grasp=True,
+                        pickup_manipulator_target_m=grasp_position,
+                        placement_manipulator_target_m=removal_grasp,
+                        requires_disposal=True,
+                    )
+                    removal_options.append(
+                        (
+                            removal_pickup_yaw,
+                            option_pickup_base,
+                            removal_yaw,
+                            option_removal_base,
+                            option_facts,
+                        )
+                    )
+            (
+                removal_pickup_yaw,
+                removal_pickup_base,
+                removal_yaw,
+                removal_base,
+                removal_facts,
+            ) = next(
+                (
+                    option
+                    for option in removal_options
+                    if all(vars(option[4]).values())
+                ),
+                removal_options[0],
             )
             remove = CountermeasureAction(
                 action_id=f"remove-{self._safe_name(object_path)}",
@@ -1137,7 +1312,7 @@ class IsaacActionCandidateGenerator:
                     remove,
                     belief,
                     removal_facts,
-                    target_m=removal_target,
+                    target_m=removal_root,
                     remaining_fraction=(0.0 if object_path in belief.basis_ids else 1.0),
                     tags=frozenset({"object_remove", "scene_derived"}),
                 )

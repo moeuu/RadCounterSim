@@ -9,19 +9,24 @@ import importlib
 import json
 import math
 import os
+import platform
 import shutil
 import subprocess
 import sys
 import time
+import tomllib
 import traceback
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, is_dataclass, replace
 from enum import Enum
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import numpy as np
+
+from radcounter.core.experiments import EvidenceClass, sha256_file
 
 ROOT = Path(__file__).resolve().parents[1]
 EXTENSION = ROOT / "source/extensions/radcounter.isaac"
@@ -116,6 +121,7 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         help="cap the open GUI refresh rate; use 0 to disable the limit",
     )
     parser.add_argument("--decon-duration-s", type=float, default=1.5)
+    parser.add_argument("--seed", type=int, default=11)
     parser.add_argument("--system-catalog", type=Path)
     parser.add_argument("--profile")
     parser.add_argument("--environment")
@@ -151,6 +157,8 @@ def _arguments(argv: list[str] | None = None) -> argparse.Namespace:
         )
     if arguments.natural_language_timeout_s <= 0.0:
         parser.error("--natural-language-timeout-s must be positive")
+    if arguments.seed < 0:
+        parser.error("--seed must be nonnegative")
     if not math.isfinite(arguments.max_fps) or arguments.max_fps < 0.0:
         parser.error("--max-fps must be a finite non-negative number")
     recording_delays = (
@@ -222,6 +230,84 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (tuple, list, set, frozenset)):
         return [_jsonable(item) for item in value]
     return str(value)
+
+
+def _required_package_version(distribution: str) -> str:
+    try:
+        return version(distribution)
+    except PackageNotFoundError as error:
+        raise RuntimeError(
+            f"physical validation cannot identify required distribution {distribution!r}"
+        ) from error
+
+
+def _project_version() -> str:
+    try:
+        return version("radcountersim")
+    except PackageNotFoundError as error:
+        payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        project = payload.get("project")
+        value = None if not isinstance(project, Mapping) else project.get("version")
+        if not isinstance(value, str) or not value:
+            raise RuntimeError(
+                "physical validation cannot identify the RadInterAct version"
+            ) from error
+        return value
+
+
+def _physical_execution_runtime() -> dict[str, Any]:
+    """Capture the runtime that produced physical simulation evidence."""
+
+    import _radcounter_embree
+    import carb.settings
+
+    completed = subprocess.run(
+        [
+            "nvidia-smi",
+            "--query-gpu=name,driver_version,memory.total",
+            "--format=csv,noheader,nounits",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10.0,
+    )
+    gpus: list[dict[str, Any]] = []
+    for line in completed.stdout.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) != 3:
+            raise RuntimeError("nvidia-smi returned an invalid physical-runtime record")
+        try:
+            memory_mib = int(fields[2])
+        except ValueError as error:
+            raise RuntimeError("nvidia-smi returned invalid GPU memory") from error
+        if not fields[0] or not fields[1] or memory_mib <= 0:
+            raise RuntimeError("nvidia-smi returned incomplete GPU evidence")
+        gpus.append(
+            {
+                "name": fields[0],
+                "driver_version": fields[1],
+                "memory_mib": memory_mib,
+            }
+        )
+    if not gpus:
+        raise RuntimeError("physical validation requires at least one reported NVIDIA GPU")
+    renderer_mode = carb.settings.get_settings().get_as_string("/rtx/rendermode")
+    if not renderer_mode:
+        raise RuntimeError("physical validation could not identify the Isaac renderer mode")
+    embree_version = str(_radcounter_embree.embree_version())
+    if not embree_version:
+        raise RuntimeError("physical validation could not identify the Embree version")
+    return {
+        "python_version": platform.python_version(),
+        "platform": platform.platform(),
+        "numpy_version": _required_package_version("numpy"),
+        "radcountersim_version": _project_version(),
+        "isaac_sim_version": _required_package_version("isaacsim"),
+        "embree_version": embree_version,
+        "renderer_mode": renderer_mode,
+        "gpus": gpus,
+    }
 
 
 def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -313,20 +399,20 @@ class _ValidationPanel:
         self.result = ui.SimpleStringModel("No operation has completed yet")
         self.audit = ui.SimpleStringModel("Validation is running")
         self.window = ui.Window(
-            "RadCounterSim Full Validation",
+            "RadInterAct Full Validation",
             width=520,
             height=690,
             dockPreference=ui.DockPreference.RIGHT,
         )
         self.window.frame.set_build_fn(self._build)
-        # Keep both RadCounterSim panels together from startup.  Operations is
+        # Keep both RadInterAct panels together from startup. Operations is
         # the normal operator-facing tab, so leave it selected after docking.
         target_active = getattr(
             ui.DockPolicy,
             "TARGET_WINDOW_IS_ACTIVE",
             ui.DockPolicy.CURRENT_WINDOW_IS_ACTIVE,
         )
-        self.window.deferred_dock_in("RadCounterSim Operations", target_active)
+        self.window.deferred_dock_in("RadInterAct Operations", target_active)
 
     def _build(self) -> None:
         ui = self._ui
@@ -417,10 +503,7 @@ def _start_display_recording(args: argparse.Namespace) -> subprocess.Popen[bytes
         "-video_size",
         f"{args.record_monitor_width}x{args.record_monitor_height}",
         "-i",
-        (
-            f"{args.record_display}+{args.record_monitor_x},"
-            f"{args.record_monitor_y}"
-        ),
+        (f"{args.record_display}+{args.record_monitor_x},{args.record_monitor_y}"),
         "-c:v",
         "h264_nvenc",
         "-preset",
@@ -576,6 +659,17 @@ def _activity_total(path: Path) -> float:
 
 def _measurement_rows(items: Iterable[Any]) -> list[dict[str, Any]]:
     return [_jsonable(item) for item in items]
+
+
+def _spectrum_components(value: Any) -> dict[str, object]:
+    return {
+        "total_cps_per_bin": np.asarray(value.total_cps_per_bin).tolist(),
+        "primary_cps_per_bin": np.asarray(value.primary_cps_per_bin).tolist(),
+        "corrected_source_cps_per_bin": np.asarray(value.corrected_source_cps_per_bin).tolist(),
+        "background_cps_per_bin": np.asarray(value.background_cps_per_bin).tolist(),
+        "live_fraction": float(value.live_fraction),
+        "buildup_model_name": str(value.buildup_model_name),
+    }
 
 
 def _attribute_value(prim: Any, name: str, default: Any = None) -> Any:
@@ -1651,7 +1745,7 @@ def _run_configurable_system(
     """Load a catalog selection without assuming the vertical-slice task layout."""
 
     import omni.usd
-    from radcounter.isaac.runtime import IsaacRadiationSimulation
+    from radcounter.isaac.runtime import IsaacRadiationSimulation, RuntimeConfiguration
     from radcounter.isaac.system_profile import (
         compose_selected_system,
         prepare_environment_stage,
@@ -1674,7 +1768,11 @@ def _run_configurable_system(
     composed = compose_selected_system(stage, selection, stage_path=stage_path)
     for _ in range(30):
         app.update()
-    simulation = IsaacRadiationSimulation.from_config(stage, composed.runtime_config_path)
+    runtime_configuration = replace(
+        RuntimeConfiguration.from_json(composed.runtime_config_path),
+        seed=args.seed,
+    )
+    simulation = IsaacRadiationSimulation(stage, runtime_configuration)
     dashboard.configure_system_paths(
         stage_path=composed.stage_path,
         config_path=composed.runtime_config_path,
@@ -1745,8 +1843,11 @@ def _run_validation(
         create_decontamination_activity_map,
         enable_real_robot_extensions,
     )
-    from radcounter.isaac.runtime import IsaacRadiationSimulation
-    from radcounter.isaac.workflow import IsaacWorkflowServices
+    from radcounter.isaac.runtime import IsaacRadiationSimulation, RuntimeConfiguration
+    from radcounter.isaac.workflow import (
+        IsaacPublicPoissonEstimator,
+        IsaacWorkflowServices,
+    )
 
     from radcounter.core.actions import ResourceState
     from radcounter.core.models import BeliefState, RevisionState
@@ -1803,7 +1904,12 @@ def _run_validation(
         artifact_root / "runtime_workbench_activity.npz"
     )
     floor_activity_before = _activity_total(activity_path)
-    author_real_robot_task_scene(stage, activity_path, config=robot_config)
+    author_real_robot_task_scene(
+        stage,
+        activity_path,
+        ROOT / "configs/decontamination/concrete_surface.synthetic.yaml",
+        config=robot_config,
+    )
     if args.decontamination_smoke_test:
         # This run selects only contact decontamination. Do not leave an
         # unrelated movable validation shield in the imported CAD where its
@@ -1893,9 +1999,10 @@ def _run_validation(
         # Keep later operator-triggered physics motion observable instead of
         # advancing hundreds of rendered steps as fast as the GPU allows.
         stepper.frame_delay_s = max(stepper.frame_delay_s, 1.0 / 120.0)
-    simulation = IsaacRadiationSimulation.from_config(
+    runtime_config_path = ROOT / "configs/scenarios/vertical_slice.runtime.json"
+    simulation = IsaacRadiationSimulation(
         stage,
-        ROOT / "configs/scenarios/vertical_slice.runtime.json",
+        replace(RuntimeConfiguration.from_json(runtime_config_path), seed=args.seed),
     )
     dashboard.simulation = simulation
     candidate_config = SceneCandidateConfig(
@@ -1903,11 +2010,6 @@ def _run_validation(
         measurement_pose_path=robot_config.measurement_articulation,
         end_effector_offset_m=(0.72, 0.0, 0.0),
         decon_end_effector_offset_m=(0.90, 0.0, 0.0),
-        # Live contact validation shows that less than 0.90 m lets the
-        # Ridgeback envelope push the drum before the gripper reaches its
-        # stand-off handle.  Preserve this physical separation; the planner
-        # changes approach side when a later task needs a different workspace.
-        object_end_effector_offset_m=(0.90, 0.0, 0.0),
         manipulator_workspace_m=0.95,
         mobile_clearance_m=0.55,
         ignored_collision_paths=(
@@ -1935,6 +2037,8 @@ def _run_validation(
         },
         remaining_shield_units={"lead": 3},
         remaining_decon_media=120.0,
+        remaining_clean_water_l=40.0,
+        remaining_wastewater_capacity_l=40.0,
         remaining_countermeasure_count=12,
     )
     decontaminator = ContactDrivenDecontaminator(
@@ -1950,27 +2054,27 @@ def _run_validation(
             treatment_axis_local=(0.0, 0.0, 1.0),
             max_contact_distance_m=0.045,
             max_surface_speed_m_s=0.35,
-            rate_constant_s_inv=1.1,
             transfer_mode="transfer_to_waste",
         ),
     )
 
-    def estimator(measurement: object, previous: BeliefState | None) -> BeliefState:
-        del measurement
-        return belief if previous is None else previous
+    public_estimator = IsaacPublicPoissonEstimator(simulation)
 
     services = IsaacWorkflowServices(
         simulation,
         generator,
-        estimator,
+        public_estimator,
         controller=countermeasure_controller,
         measurement_controller=measurement_controller,
         decontaminators={robot_config.decon_surface_path: decontaminator},
         resources=resources,
+        reestimate_after_verification=True,
+        simulation_time_s=lambda: float(world.current_time),
         artifact_path=ROOT / "artifacts/ui/latest_workflow.json",
     )
     checker = DeterministicFeasibilityChecker()
     _complete(services.initialize())
+    initial_resource_state = _jsonable(services.workflow_view()["resources"])
     dashboard.configure_system_paths(
         stage_path=stage_path,
         config_path=ROOT / "configs/scenarios/vertical_slice.runtime.json",
@@ -2204,6 +2308,9 @@ def _run_validation(
     initial_obstacle_position = _world_position(stage, "/World/MovableObstacle")
     protected = "/World/DetectorStations/Protected"
     initial_protected_rate = simulation.expected_rates(detector_paths=[protected])[protected]
+    initial_spectrum_components = _spectrum_components(
+        simulation.expected_spectrum_components(detector_paths=[protected])[protected]
+    )
 
     def execute_candidate(
         label: str,
@@ -2282,6 +2389,7 @@ def _run_validation(
         candidate.action.target_prim_path for candidate in measurement_candidates
     )
     executed_measurement_action_ids: list[str] = []
+    station_executions: list[dict[str, object]] = []
     panel.update("Moving measurement robot through all stations", completed, total_operations)
     for station_path in measurement_station_paths:
         # Each route must begin at Nova Carter's live pose.  Reusing the routes
@@ -2316,13 +2424,22 @@ def _run_validation(
                 f"direct_blockers={direct_blockers}"
             )
         executed_measurement_action_ids.append(candidate.action.action_id)
+        station_executions.append(
+            {
+                "action": _jsonable(candidate.action),
+                "result": _jsonable(result.public_view()),
+            }
+        )
     initial_measurement = _complete(services.measure())
     belief = services.estimate(initial_measurement, None)
+    initial_estimate = _jsonable(services.workflow_view()["estimate"])
+    initial_estimator_audit = _jsonable(public_estimator.last_audit)
     completed += 1
     records.append(
         {
             "label": "all-station measurement",
             "station_actions": executed_measurement_action_ids,
+            "station_executions": station_executions,
             "measurement": _measurement_rows(initial_measurement),
         }
     )
@@ -2457,19 +2574,35 @@ def _run_validation(
     final_shield_position = _world_position(stage, "/World/LeadShield")
     final_obstacle_position = _world_position(stage, "/World/MovableObstacle")
     drum = stage.GetPrimAtPath("/World/HiddenContaminatedDrum")
-    drum_disposed = not drum or not drum.IsValid() or not drum.IsActive()
+    drum_secured = False
     if drum and drum.IsValid() and drum.IsActive():
         source_enabled = drum.GetAttribute("rad:source:enabled")
         disposed = drum.GetAttribute("rad:disposal:disposed")
-        drum_disposed = (
+        disposition = drum.GetAttribute("rad:disposal:disposition")
+        contained = drum.GetAttribute("rad:source:contained")
+        containment_path = drum.GetAttribute("rad:source:containmentPrimPath")
+        drum_secured = (
             source_enabled
             and source_enabled.HasAuthoredValueOpinion()
-            and not bool(source_enabled.Get())
+            and bool(source_enabled.Get())
             and disposed
             and disposed.HasAuthoredValueOpinion()
             and bool(disposed.Get())
+            and disposition
+            and disposition.Get() == "shielded_storage"
+            and contained
+            and bool(contained.Get())
+            and containment_path
+            and containment_path.Get() == "/World/DisposalStorage"
         )
     final_protected_rate = simulation.expected_rates(detector_paths=[protected])[protected]
+    final_spectrum_components = _spectrum_components(
+        simulation.expected_spectrum_components(detector_paths=[protected])[protected]
+    )
+    final_workflow_view = services.workflow_view()
+    physics_data_class = str(
+        json.loads(runtime_config_path.read_text(encoding="utf-8"))["physics_data_class"]
+    )
 
     invariants = {
         "all_operations_completed": completed == total_operations,
@@ -2483,7 +2616,7 @@ def _run_validation(
         "contaminated_drum_relocated_before_disposal": any(
             row["label"] == "contaminated object relocation" for row in records
         ),
-        "contaminated_drum_disposed": drum_disposed,
+        "contaminated_drum_secured_in_shielded_storage": drum_secured,
         "obstacle_moved": float(np.linalg.norm(final_obstacle_position - initial_obstacle_position))
         > 0.25,
         "post_action_measurement_available": bool(final_measurement),
@@ -2499,7 +2632,13 @@ def _run_validation(
 
     return {
         "success": True,
+        "evidence_class": EvidenceClass.PHYSICAL_ROBOT_EXECUTION.value,
+        "seed": args.seed,
+        "physics_data_class": physics_data_class,
+        "runtime_config": str(runtime_config_path),
+        "runtime_config_sha256": sha256_file(runtime_config_path),
         "stage": str(stage_path),
+        "stage_sha256": sha256_file(stage_path),
         "assets": asset_manifest,
         "robot_models": {
             "countermeasure": "Clearpath Ridgeback + Franka Panda",
@@ -2533,9 +2672,25 @@ def _run_validation(
             "measurement_robot_position_m": final_robot_position,
             "shield_position_m": final_shield_position,
             "obstacle_position_m": final_obstacle_position,
-            "drum_disposed": drum_disposed,
+            "drum_secured_in_shielded_storage": drum_secured,
         },
         "transport_statistics": simulation.transport.statistics,
+        "radiation_audit": {
+            "detector_path": protected,
+            "initial": initial_spectrum_components,
+            "final": final_spectrum_components,
+        },
+        "resource_audit": {
+            "initial": initial_resource_state,
+            "final": _jsonable(final_workflow_view["resources"]),
+        },
+        "estimation_audit": {
+            "initial": initial_estimate,
+            "final": _jsonable(final_workflow_view["estimate"]),
+            "residual": _jsonable(final_workflow_view["residual"]),
+            "initial_solver": initial_estimator_audit,
+            "final_solver": _jsonable(public_estimator.last_audit),
+        },
         "controller_trace": countermeasure_controller.trace,
         "measurement_controller_trace": measurement_controller.trace,
         "robot_monitor": dashboard.robot_monitor_audit(),
@@ -2559,12 +2714,15 @@ def main(argv: list[str] | None = None) -> int:
     dashboard = None
     payload: dict[str, Any]
     exit_code = 0
+    started = time.perf_counter()
     try:
         from radcounter.isaac.ui.dashboard import RadCounterDashboard
 
         dashboard = RadCounterDashboard("radcounter.gui.validation")
         panel = _ValidationPanel()
         payload = _run_validation(app, args, panel, dashboard)
+        if payload.get("evidence_class") == EvidenceClass.PHYSICAL_ROBOT_EXECUTION.value:
+            payload["execution_runtime"] = _physical_execution_runtime()
     except Exception as error:
         exit_code = 1
         preserved = (
@@ -2582,6 +2740,7 @@ def main(argv: list[str] | None = None) -> int:
             "traceback": traceback.format_exc(),
         }
         print(payload["traceback"], flush=True)
+    payload["wall_time_s"] = time.perf_counter() - started
     _atomic_json(args.artifact, payload)
     print(
         json.dumps({"validation_artifact": str(args.artifact), **payload}, default=str), flush=True

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import yaml
 
 from radcounter.core.logging import JsonlEventLogger, build_manifest, write_manifest
@@ -116,6 +115,8 @@ class RunArtifactWriter:
 
     def write_table(self, name: str, records: Sequence[Mapping[str, Any]]) -> Path:
         """Write one Parquet table with JSON-normalized nested values."""
+
+        import pandas as pd
 
         if name not in REQUIRED_TABLES:
             raise ValueError(f"unsupported required table name: {name}")

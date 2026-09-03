@@ -27,7 +27,7 @@ class AnalyticRadiationValidationCase:
             "validation",
             np.array([0.0, 200.0]),
             np.array([1.0, 100.0, 200.0]),
-            np.ones(3),
+            np.ones((3, 1)),
             np.zeros(1),
         )
         isotope = (IsotopeSpec("synthetic", (EmissionLine(100.0, 1.0),)),)

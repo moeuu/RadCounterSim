@@ -37,8 +37,8 @@ class PointSourceConfig(StrictModel):
 class DetectorConfig(StrictModel):
     detector_id: str = Field(min_length=1)
     energy_bin_edges_keV: tuple[float, ...] = Field(min_length=2)
-    efficiency_energy_keV: tuple[float, ...] = Field(min_length=2)
-    intrinsic_efficiency: tuple[float, ...] = Field(min_length=2)
+    response_energy_keV: tuple[float, ...] = Field(min_length=2)
+    effective_area_m2_per_bin: tuple[tuple[float, ...], ...] = Field(min_length=2)
     background_cps_per_bin: tuple[float, ...]
     dead_time_s: float = Field(default=0.0, ge=0)
 
@@ -46,8 +46,17 @@ class DetectorConfig(StrictModel):
     def validate_dimensions(self) -> DetectorConfig:
         if tuple(sorted(self.energy_bin_edges_keV)) != self.energy_bin_edges_keV:
             raise ValueError("energy_bin_edges_keV must be increasing")
-        if len(self.efficiency_energy_keV) != len(self.intrinsic_efficiency):
-            raise ValueError("detector efficiency arrays must match")
+        if tuple(sorted(self.response_energy_keV)) != self.response_energy_keV:
+            raise ValueError("response_energy_keV must be increasing")
+        expected_bins = len(self.energy_bin_edges_keV) - 1
+        if len(self.effective_area_m2_per_bin) != len(self.response_energy_keV) or any(
+            len(row) != expected_bins for row in self.effective_area_m2_per_bin
+        ):
+            raise ValueError(
+                "effective_area_m2_per_bin dimensions do not match response energies/bins"
+            )
+        if any(value < 0.0 for row in self.effective_area_m2_per_bin for value in row):
+            raise ValueError("effective-area response must be nonnegative")
         if len(self.background_cps_per_bin) != len(self.energy_bin_edges_keV) - 1:
             raise ValueError("background_cps_per_bin must match energy bins")
         return self
@@ -66,7 +75,9 @@ class RuntimeConfig(StrictModel):
 
 class RadiationConfig(StrictModel):
     transport_backend: Literal["analytic", "embree"] = "analytic"
-    scatter_model: Literal["none", "empirical_buildup", "truth_only_bias"] = "none"
+    scatter_model: Literal[
+        "primary_only", "reference_calibrated_optical_depth_buildup"
+    ] = "primary_only"
     minimum_distance_m: float = Field(default=0.01, gt=0)
 
 

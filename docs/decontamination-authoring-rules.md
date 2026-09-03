@@ -50,6 +50,12 @@ truth.
 8. A generator must be deterministic for a fixed configuration and expose enough
    metadata to audit candidate count, active count, total activity, and the
    irregular-mask method.
+9. Runtime radiation sampling must load the integrity-checked activity map and
+   sample the triangles of this same visible mesh. The map must cover every and
+   only every triangle of the contamination mesh, its SHA-256 digest is
+   mandatory, and centroid, stratified, or detector-adaptive quadrature must
+   preserve total activity and original triangle identity. A hidden regular
+   source proxy or a separately sampled bounding rectangle is forbidden.
 
 ## Decontamination operation
 
@@ -71,12 +77,25 @@ truth.
    activity-cell pitch; a few center/corner rays are not an area-contact model.
 4. Use the reference cumulative-exposure model: each contacted cell/triangle
    decays exponentially according to footprint exposure, local efficiency, and
-   the configured removal-rate constant. Give each contacted face one
+   the material-specific removal-rate constant. The surface must author
+   `rad:decon:substrateMaterialId`, `rad:decon:treatmentModelUri`, and
+   `rad:decon:treatmentModelSha256`; the runtime must integrity-check that file
+   and reject a substrate mismatch. Dry-contact rate and efficiency and water-jet
+   removal/washability parameters come only from that versioned file. Do not
+   duplicate them in robot-control settings or USD attributes. A research result
+   requires an `experimentally_calibrated` model; the repository fixture is
+   explicitly `synthetic_validation_only`. Give each contacted face one
    speed-adjusted frame of exposure regardless of how many footprint rays hit
    it; ray count is spatial sampling density, not elapsed time. Use the shared
    `effective_contact_exposure_s` model for analytical grids and PhysX contact.
-   Removed activity must be transferred to the configured waste sink when that
-   mode is enabled.
+   The authored `rad:decon:minToolDwellS` is mandatory. Persist unique-face
+   verified contact in `verified_contact_dwell_s`; no treatment exposure or
+   activity removal is allowed before that threshold. On the tick that crosses
+   the threshold, only the portion beyond it contributes speed-adjusted
+   exposure. This prevents a single transient ray hit from being reported as
+   treatment while keeping ray density independent of elapsed time. Removed
+   activity must be transferred to the configured waste sink when that mode is
+   enabled.
 5. Update the overlay from remaining per-face activity during treatment. Fade it
    toward the host material and hide a face only below the documented residual
    threshold; the reference renderer uses 10% of initial local activity.
@@ -87,10 +106,32 @@ truth.
 7. Record at minimum: initial/final/removed activity, removed fraction, accepted
    and rejected contacts, treated face indices or coverage, waypoint errors, tool
    path length, robot/navigation audit, and collateral-object displacement.
+   Also record the minimum dwell, dwell-qualified faces, and still-pending faces
+   so accepted contact cannot be confused with completed treatment. Record the
+   activity balance error computed from initial surface activity, cumulative
+   recontamination, remaining surface activity, and activity transferred to the
+   explicit waste source; the paper runner rejects a dry-treatment record that
+   omits this balance.
 8. Preserve the full approach -> raster treatment -> retreat sequence and verify
    that navigation and manipulation do not move unrelated drums, shields, or
    obstacles.
-9. Natural-language multi-pass requests must remain bounded. A single logical
+9. Water treatment must intersect the same visible activity-bearing triangles
+   used by radiation sampling. A ray through an irregular-field hole performs no
+   treatment. Cone coverage is evaluated on those triangle centroids and areas,
+   and the runtime must report contacted face IDs, standoff, incidence, water
+   use, recovered volume, activity removed/captured/redeposited/run off, and both
+   activity and water balance errors. Captured wastewater becomes a source in
+   visible shielded storage; activity not retained on the surface becomes an
+   explicit in-scene runoff source so later measurements include it.
+   Dry-contact and water-jet implementations must register under distinct
+   `(surface_path, treatment_method)` keys. An action requesting `water_jet`
+   must never fall back to a dry-contact implementation (or vice versa). The
+   articulated raster may use their shared treatment-tick contract, but water
+   results additionally retain applied/recovered/retained/discharged volumes
+   and activity/water balances. Reserve the action's declared clean-water and
+   wastewater limits before motion, then debit mission resources from measured
+   applied and recovered volumes after successful execution.
+10. Natural-language multi-pass requests must remain bounded. A single logical
    decontamination step may request at most five complete passes and may stop
    early only from host-computed public metrics: cumulative remaining or removed
    activity relative to the first pass baseline, or treated

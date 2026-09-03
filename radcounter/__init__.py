@@ -1,4 +1,4 @@
-"""RadCounterSim packages."""
+"""RadInterAct packages (the ``radcounter`` namespace is retained for compatibility)."""
 
 __version__ = "0.1.0"
 

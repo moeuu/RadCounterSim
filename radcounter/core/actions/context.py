@@ -16,17 +16,36 @@ FloatArray = NDArray[np.float64]
 
 @dataclass(frozen=True)
 class DisposalZone:
-    """Validated destination required before source deactivation."""
+    """Validated destination with explicit radiological disposition."""
 
     zone_id: str
     center_world_m: FloatArray
     radius_m: float
-    disposition: Literal["retain_in_scene", "deactivate_outside"] = "retain_in_scene"
+    disposition: Literal["shielded_storage", "out_of_evaluation_domain"]
+    storage_prim_path: str | None = None
+    outside_evaluation_domain: bool = False
 
     def __post_init__(self) -> None:
         center = np.asarray(self.center_world_m, dtype=np.float64)
-        if center.shape != (3,) or self.radius_m <= 0:
+        if (
+            not self.zone_id
+            or center.shape != (3,)
+            or not np.all(np.isfinite(center))
+            or not np.isfinite(self.radius_m)
+            or self.radius_m <= 0
+        ):
             raise ValueError("disposal zone requires a 3-D center and positive radius")
+        if self.disposition == "shielded_storage":
+            if not self.storage_prim_path or not self.storage_prim_path.startswith("/"):
+                raise ValueError("shielded storage requires an absolute storage_prim_path")
+            if self.outside_evaluation_domain:
+                raise ValueError("shielded storage remains inside the evaluation domain")
+        elif not self.outside_evaluation_domain:
+            raise ValueError(
+                "out-of-domain disposal requires outside_evaluation_domain=True"
+            )
+        if self.disposition == "out_of_evaluation_domain" and self.storage_prim_path is not None:
+            raise ValueError("out-of-domain disposal cannot declare storage geometry")
         object.__setattr__(self, "center_world_m", center)
 
     def contains(self, position_world_m: FloatArray) -> bool:

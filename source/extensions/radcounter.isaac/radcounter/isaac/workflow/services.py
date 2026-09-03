@@ -54,6 +54,7 @@ class WorkflowResidual:
     predicted_rate_cps: np.ndarray
     observed_rate_cps: np.ndarray
     residual_rate_cps: np.ndarray
+    normalized_residual: np.ndarray
     confidence: float
 
     def as_dict(self) -> dict[str, object]:
@@ -62,6 +63,7 @@ class WorkflowResidual:
             "predicted_rate_cps": self.predicted_rate_cps.tolist(),
             "observed_rate_cps": self.observed_rate_cps.tolist(),
             "residual_rate_cps": self.residual_rate_cps.tolist(),
+            "normalized_residual": self.normalized_residual.tolist(),
             "confidence": self.confidence,
         }
 
@@ -95,6 +97,7 @@ PreviewCallback = Callable[[CountermeasureAction, BeliefState], object]
 DiagnosisCallback = Callable[[object, tuple[PublicMeasurement, ...]], object]
 UpdateCallback = Callable[[BeliefState, object, RevisionState], BeliefState]
 TaskEvaluator = Callable[[BeliefState], TaskMetrics]
+SimulationClock = Callable[[], float]
 
 
 class IsaacWorkflowServices:
@@ -108,13 +111,15 @@ class IsaacWorkflowServices:
         *,
         controller: Any | None = None,
         measurement_controller: Any | None = None,
-        decontaminators: Mapping[str, Any] | None = None,
+        decontaminators: Mapping[object, Any] | None = None,
         resources: ResourceState | None = None,
         weights: ObjectiveWeights | None = None,
         previewer: PreviewCallback | None = None,
         diagnoser: DiagnosisCallback | None = None,
         updater: UpdateCallback | None = None,
         task_evaluator: TaskEvaluator | None = None,
+        reestimate_after_verification: bool = False,
+        simulation_time_s: SimulationClock,
         physics_dt_s: float = 1.0 / 60.0,
         artifact_path: str | Path | None = None,
     ) -> None:
@@ -125,13 +130,27 @@ class IsaacWorkflowServices:
         self.estimator_callback = estimator
         self.controller = controller
         self.measurement_controller = measurement_controller
-        self.decontaminators = dict(decontaminators or {})
+        self.decontaminators: dict[tuple[str, str], Any] = {}
+        for key, decontaminator in dict(decontaminators or {}).items():
+            if isinstance(key, tuple) and len(key) == 2:
+                surface_path, method = map(str, key)
+            else:
+                surface_path = str(key)
+                method = str(getattr(decontaminator, "treatment_method", "dry_contact"))
+            if method not in {"dry_contact", "water_jet"}:
+                raise ValueError(f"unsupported registered treatment method: {method!r}")
+            normalized = (surface_path, method)
+            if normalized in self.decontaminators:
+                raise ValueError(f"duplicate decontaminator registration: {normalized}")
+            self.decontaminators[normalized] = decontaminator
         self.resources = resources if resources is not None else ResourceState()
         self.weights = weights or ObjectiveWeights()
         self.previewer = previewer
         self.diagnoser = diagnoser
         self.updater = updater
         self.task_evaluator = task_evaluator
+        self.reestimate_after_verification = bool(reestimate_after_verification)
+        self.simulation_time_s = simulation_time_s
         self.physics_dt_s = physics_dt_s
         self.artifact_path = None if artifact_path is None else Path(artifact_path)
         self.revision = RevisionState()
@@ -156,28 +175,29 @@ class IsaacWorkflowServices:
             for record in records
         )
 
-    @staticmethod
-    def _sim_time() -> float:
-        try:
-            import omni.timeline
-
-            return float(omni.timeline.get_timeline_interface().get_current_time())
-        except Exception:
-            return 0.0
+    def _sim_time(self) -> float:
+        value = float(self.simulation_time_s())
+        if not math.isfinite(value) or value < 0.0:
+            raise RuntimeError("simulation clock must return a finite nonnegative time")
+        return value
 
     async def initialize(self) -> None:
         changed = self.simulation.synchronize()
         if changed:
             self.revision.bump_geometry()
 
+    def _consume_measurement_time(self, duration_s: float) -> None:
+        if math.isfinite(self.resources.remaining_measurement_time_s):
+            self.resources.remaining_measurement_time_s = max(
+                0.0,
+                self.resources.remaining_measurement_time_s - duration_s,
+            )
+
     async def measure(self) -> tuple[PublicMeasurement, ...]:
         duration = self.simulation.configuration.duration_s
         records = tuple(self.simulation.measure(duration_s=duration))
         self.last_measurement = self._public(records)
-        if math.isfinite(self.resources.remaining_measurement_time_s):
-            self.resources.remaining_measurement_time_s = max(
-                0.0, self.resources.remaining_measurement_time_s - duration
-            )
+        self._consume_measurement_time(duration)
         return self.last_measurement
 
     def estimate(
@@ -292,9 +312,7 @@ class IsaacWorkflowServices:
             pickup_base_route_m=pickup_route,
             placement_base_route_m=placement_route,
             target_root_position_m=(
-                None
-                if action.target_pose_world is None
-                else action.target_pose_world[:3, 3]
+                None if action.target_pose_world is None else action.target_pose_world[:3, 3]
             ),
             placement_settle_tolerance_m=float(
                 parameters.get("placement_settle_tolerance_m", 0.15)
@@ -338,9 +356,7 @@ class IsaacWorkflowServices:
             )
             message = report.message
             if collateral_violations:
-                paths = ", ".join(
-                    str(row["object_path"]) for row in collateral_violations
-                )
+                paths = ", ".join(str(row["object_path"]) for row in collateral_violations)
                 message = f"{message}; unintended object motion detected: {paths}"
             return _ExecutionReport(
                 False,
@@ -352,9 +368,7 @@ class IsaacWorkflowServices:
                     "plan_audit": plan_audit,
                 },
             )
-        collateral_audit, collateral_violations = self._collateral_motion_audit(
-            collateral_before
-        )
+        collateral_audit, collateral_violations = self._collateral_motion_audit(collateral_before)
         if collateral_violations:
             paths = ", ".join(str(row["object_path"]) for row in collateral_violations)
             return _ExecutionReport(
@@ -404,9 +418,43 @@ class IsaacWorkflowServices:
 
     def _execute_decontamination(self, action: CountermeasureAction) -> _ExecutionReport:
         surface_path = str(action.parameters.get("surface_path", action.target_prim_path or ""))
-        decontaminator = self.decontaminators.get(surface_path)
+        method = str(action.parameters.get("treatment_method", "dry_contact"))
+        if method not in {"dry_contact", "water_jet"}:
+            return _ExecutionReport(False, f"unsupported treatment method {method!r}", {})
+        decontaminator = self.decontaminators.get((surface_path, method))
         if decontaminator is None:
-            return _ExecutionReport(False, f"no contact decontaminator for {surface_path}", {})
+            return _ExecutionReport(
+                False,
+                f"no {method} decontaminator for {surface_path}",
+                {},
+            )
+        if getattr(decontaminator, "treatment_method", None) != method:
+            return _ExecutionReport(False, "registered treatment implementation mismatch", {})
+        if method == "water_jet":
+            if "clean_water_l" not in action.parameters or "wastewater_l" not in action.parameters:
+                return _ExecutionReport(False, "water resource requirements are missing", {})
+            requested_water = float(action.parameters["clean_water_l"])
+            requested_wastewater = float(action.parameters["wastewater_l"])
+            if (
+                not math.isfinite(requested_water)
+                or not math.isfinite(requested_wastewater)
+                or requested_water < 0.0
+                or requested_wastewater < 0.0
+                or requested_water > self.resources.remaining_clean_water_l
+                or requested_wastewater > self.resources.remaining_wastewater_capacity_l
+            ):
+                return _ExecutionReport(False, "water resources are invalid or exhausted", {})
+            state = decontaminator.state
+            state.supply_remaining_l = min(
+                state.supply_remaining_l,
+                requested_water,
+                self.resources.remaining_clean_water_l,
+            )
+            state.wastewater_capacity_l = state.wastewater_volume_l + min(
+                state.wastewater_capacity_remaining_l,
+                requested_wastewater,
+                self.resources.remaining_wastewater_capacity_l,
+            )
         collateral_before = self._collateral_positions()
         stow = None
         if self.controller is not None and hasattr(self.controller, "stow_arm"):
@@ -453,49 +501,113 @@ class IsaacWorkflowServices:
                 collateral_before
             )
             success = bool(report.success) and not collateral_violations
+            treatment_details: dict[str, object] = {
+                "surface_path": surface_path,
+                "treatment_method": method,
+                "accepted_contacts": int(report.accepted_contacts),
+                "removed_activity_bq": float(report.removed_activity_bq),
+                "activity_balance_error_bq": float(report.activity_balance_error_bq),
+                "treated_area_coverage_fraction": float(report.coverage_fraction),
+                "treatment_model_id": decontaminator.treatment_model.model_id,
+                "treatment_data_status": decontaminator.treatment_model.status,
+                "treatment_numeric_sha256": (decontaminator.treatment_model.numeric_sha256),
+                "minimum_tool_dwell_s": float(report.minimum_tool_dwell_s),
+                "dwell_qualified_triangle_indices": list(report.dwell_qualified_triangle_indices),
+                "dwell_pending_triangle_indices": list(report.dwell_pending_triangle_indices),
+                "activity_map_sha256": digest,
+                "stow_audit": None if stow is None else _motion_audit(stow),
+                "navigation_audit": (None if navigation is None else _motion_audit(navigation)),
+                "motion_audit": _motion_audit(report),
+                "collateral_motion_audit": collateral_audit,
+            }
+            if method == "water_jet":
+                state = decontaminator.state
+                treatment_details.update(
+                    {
+                        "water_balance_error_l": float(
+                            decontaminator.process.water_balance_error_l
+                        ),
+                        "applied_water_l": float(state.applied_water_l),
+                        "recovered_water_l": float(state.recovered_water_l),
+                        "retained_surface_water_l": float(state.retained_surface_water_l),
+                        "discharged_water_l": float(state.discharged_water_l),
+                        "captured_activity_bq": float(state.captured_activity_bq),
+                        "redeposited_activity_bq": float(state.redeposited_activity_bq),
+                        "discharged_activity_bq": float(state.discharged_activity_bq),
+                    }
+                )
             return _ExecutionReport(
                 success,
-                "articulated contact decontamination completed"
+                f"articulated {method} decontamination completed"
                 if success
                 else (
                     "unintended object motion detected during decontamination"
                     if collateral_violations
                     else "articulated contact decontamination failed"
                 ),
-                {
-                    "surface_path": surface_path,
-                    "accepted_contacts": int(report.accepted_contacts),
-                    "removed_activity_bq": float(report.removed_activity_bq),
-                    "activity_map_sha256": digest,
-                    "stow_audit": None if stow is None else _motion_audit(stow),
-                    "navigation_audit": (
-                        None if navigation is None else _motion_audit(navigation)
-                    ),
-                    "motion_audit": _motion_audit(report),
-                    "collateral_motion_audit": collateral_audit,
-                },
+                treatment_details,
             )
         ticks = max(1, int(math.ceil(duration / self.physics_dt_s)))
         removed = 0.0
         contacts = 0
+        dwell_qualified: set[int] = set()
+        dwell_pending: set[int] = set()
+        activity_balance_error_bq = 0.0
         for step in range(1, ticks + 1):
             treatment = decontaminator.tick(self.physics_dt_s, step)
             removed += float(treatment.removed_activity_bq)
             contacts += int(treatment.accepted_contacts)
+            dwell_qualified.update(treatment.dwell_qualified_triangle_indices)
+            dwell_pending.update(treatment.dwell_pending_triangle_indices)
+            dwell_pending.difference_update(dwell_qualified)
+            activity_balance_error_bq = float(treatment.activity_balance_error_bq)
             if self.controller is not None:
                 self.controller.stepper.step(render=False)
         digest = decontaminator.flush()
         self.simulation.refresh_scene_state()
+        treatment_details = {
+            "surface_path": surface_path,
+            "treatment_method": method,
+            "ticks": ticks,
+            "accepted_contacts": contacts,
+            "removed_activity_bq": removed,
+            "activity_balance_error_bq": activity_balance_error_bq,
+            "treated_area_coverage_fraction": len(dwell_qualified)
+            / max(len(decontaminator.triangle_indices), 1),
+            "treatment_model_id": decontaminator.treatment_model.model_id,
+            "treatment_data_status": decontaminator.treatment_model.status,
+            "treatment_numeric_sha256": decontaminator.treatment_model.numeric_sha256,
+            "minimum_tool_dwell_s": decontaminator.minimum_tool_dwell_s,
+            "dwell_qualified_triangle_indices": sorted(dwell_qualified),
+            "dwell_pending_triangle_indices": sorted(dwell_pending),
+            "activity_map_sha256": digest,
+        }
+        if method == "water_jet":
+            state = decontaminator.state
+            treatment_details.update(
+                {
+                    "water_balance_error_l": float(decontaminator.process.water_balance_error_l),
+                    "applied_water_l": float(state.applied_water_l),
+                    "recovered_water_l": float(state.recovered_water_l),
+                    "retained_surface_water_l": float(state.retained_surface_water_l),
+                    "discharged_water_l": float(state.discharged_water_l),
+                    "captured_activity_bq": float(state.captured_activity_bq),
+                    "redeposited_activity_bq": float(state.redeposited_activity_bq),
+                    "discharged_activity_bq": float(state.discharged_activity_bq),
+                }
+            )
         return _ExecutionReport(
-            contacts > 0,
-            "contact decontamination completed" if contacts else "no valid tool contact",
-            {
-                "surface_path": surface_path,
-                "ticks": ticks,
-                "accepted_contacts": contacts,
-                "removed_activity_bq": removed,
-                "activity_map_sha256": digest,
-            },
+            contacts > 0 and removed > 0.0,
+            (
+                "contact decontamination completed"
+                if removed > 0.0
+                else (
+                    "minimum verified dwell was not reached"
+                    if contacts
+                    else "no valid tool contact"
+                )
+            ),
+            treatment_details,
         )
 
     def _physical_execute(self, action: CountermeasureAction) -> _ExecutionReport:
@@ -564,7 +676,11 @@ class IsaacWorkflowServices:
             "placement_fraction": placement_fraction,
         }
 
-    def _consume(self, action: CountermeasureAction) -> None:
+    def _consume(
+        self,
+        action: CountermeasureAction,
+        public_details: Mapping[str, object] | None = None,
+    ) -> None:
         self.resources.consume(action.resource_cost)
         runtime = self.resources.remaining_robot_runtime_s.get(action.robot_id)
         if runtime is not None:
@@ -597,6 +713,27 @@ class IsaacWorkflowServices:
             self.resources.remaining_decon_media = max(
                 0.0, self.resources.remaining_decon_media - used
             )
+        if (
+            action.action_type == ActionType.DECONTAMINATE
+            and action.parameters.get("treatment_method", "dry_contact") == "water_jet"
+        ):
+            details = public_details or {}
+            clean_water_l = float(
+                details.get("applied_water_l", action.parameters["clean_water_l"])
+            )
+            wastewater_l = float(
+                details.get("recovered_water_l", action.parameters["wastewater_l"])
+            )
+            if math.isfinite(self.resources.remaining_clean_water_l):
+                self.resources.remaining_clean_water_l = max(
+                    0.0,
+                    self.resources.remaining_clean_water_l - clean_water_l,
+                )
+            if math.isfinite(self.resources.remaining_wastewater_capacity_l):
+                self.resources.remaining_wastewater_capacity_l = max(
+                    0.0,
+                    self.resources.remaining_wastewater_capacity_l - wastewater_l,
+                )
 
     def _bump_revision(self, action: CountermeasureAction) -> None:
         if action.action_type == ActionType.DECONTAMINATE:
@@ -623,7 +760,7 @@ class IsaacWorkflowServices:
             report = _ExecutionReport(False, f"{type(exc).__name__}: {exc}", {})
         if report.success:
             shield_state = self._update_shield_deployment_metadata(action)
-            self._consume(action)
+            self._consume(action, report.public_details)
             self._bump_revision(action)
             changed = self.simulation.synchronize()
             status = ActionStatus.COMPLETED
@@ -636,11 +773,14 @@ class IsaacWorkflowServices:
             status = ActionStatus.FAILED
             details = dict(report.public_details)
         details["message"] = report.message
+        completed = self._sim_time()
+        if completed < started:
+            raise RuntimeError("simulation clock moved backwards during physical execution")
         return ActionResult(
             action_id=action.action_id,
             status=status,
             started_sim_s=started,
-            completed_sim_s=self._sim_time(),
+            completed_sim_s=completed,
             public_details=details,
             truth_details=None,
             before_revision=before,
@@ -650,9 +790,9 @@ class IsaacWorkflowServices:
     async def verify(self, action: CountermeasureAction) -> tuple[PublicMeasurement, ...]:
         del action
         self.simulation.synchronize()
-        records = tuple(
-            self.simulation.measure(duration_s=self.simulation.configuration.duration_s)
-        )
+        duration = self.simulation.configuration.duration_s
+        records = tuple(self.simulation.measure(duration_s=duration))
+        self._consume_measurement_time(duration)
         self.last_verification = self._public(records)
         return self.last_verification
 
@@ -675,10 +815,18 @@ class IsaacWorkflowServices:
         observed_rate = np.asarray([item.measured_rate_cps for item in selected], dtype=np.float64)
         predicted_rates = np.full(len(selected), predicted_rate, dtype=np.float64)
         residual = observed_rate - predicted_rates
+        durations_s = np.asarray([item.duration_s for item in selected], dtype=np.float64)
+        predicted_count_variance = np.maximum(predicted_rates * durations_s, 1.0)
+        normalized_residual = residual * durations_s / np.sqrt(predicted_count_variance)
         scale = float(np.linalg.norm(observed_rate) + np.linalg.norm(predicted_rates) + 1.0e-12)
         confidence = float(np.clip(1.0 - np.linalg.norm(residual) / scale, 0.0, 1.0))
         self.last_diagnosis = WorkflowResidual(
-            paths, predicted_rates, observed_rate, residual, confidence
+            paths,
+            predicted_rates,
+            observed_rate,
+            residual,
+            normalized_residual,
+            confidence,
         )
         self.write_workflow_artifact()
         return self.last_diagnosis
@@ -688,6 +836,23 @@ class IsaacWorkflowServices:
             updated = self.updater(belief, diagnosis, self.revision.copy())
             if not isinstance(updated, BeliefState):
                 raise TypeError("the injected updater must return BeliefState")
+            self.last_belief = updated
+            self.write_workflow_artifact()
+            return updated
+        if self.reestimate_after_verification:
+            if not self.last_verification:
+                raise RuntimeError("belief update requires a completed verification measurement")
+            estimate = self.estimator_callback(self.last_verification, belief)
+            if not isinstance(estimate, BeliefState):
+                raise TypeError("the estimator callback must return BeliefState")
+            updated = BeliefState(
+                estimate.basis_ids,
+                estimate.source_strength_bq.copy(),
+                estimate.covariance.copy(),
+                self.revision.copy(),
+                dict(estimate.remaining_resources),
+                dict(estimate.action_effect_parameters),
+            )
             self.last_belief = updated
             self.write_workflow_artifact()
             return updated
@@ -721,17 +886,28 @@ class IsaacWorkflowServices:
         diagnosis = self.last_diagnosis
         if hasattr(diagnosis, "as_dict"):
             diagnosis = diagnosis.as_dict()
+        estimate: dict[str, object] | None = None
+        if self.last_belief is not None:
+            estimate = {
+                "basis_ids": list(self.last_belief.basis_ids),
+                "source_strength_bq": self.last_belief.source_strength_bq.tolist(),
+                "covariance_diagonal": np.diag(self.last_belief.covariance).tolist(),
+                "activity_standard_deviation_bq": np.sqrt(
+                    np.maximum(np.diag(self.last_belief.covariance), 0.0)
+                ).tolist(),
+            }
+            try:
+                positions = [
+                    self.candidate_generator.probe.world_position(path).tolist()
+                    for path in self.last_belief.basis_ids
+                ]
+            except (AttributeError, TypeError, ValueError):
+                positions = []
+            if len(positions) == len(self.last_belief.basis_ids):
+                estimate["positions_world_m"] = positions
         return {
             "measurement": [item.as_dict() for item in self.last_measurement],
-            "estimate": (
-                None
-                if self.last_belief is None
-                else {
-                    "basis_ids": list(self.last_belief.basis_ids),
-                    "source_strength_bq": self.last_belief.source_strength_bq.tolist(),
-                    "covariance_diagonal": np.diag(self.last_belief.covariance).tolist(),
-                }
-            ),
+            "estimate": estimate,
             "selected_action": (
                 None
                 if self.last_action is None
@@ -745,6 +921,18 @@ class IsaacWorkflowServices:
             "verification": [item.as_dict() for item in self.last_verification],
             "residual": diagnosis,
             "revision": vars(self.revision),
+            "resources": {
+                "available": dict(self.resources.available),
+                "consumed": dict(self.resources.consumed),
+                "measurement_time_s": self.resources.remaining_measurement_time_s,
+                "work_time_s": self.resources.remaining_work_time_s,
+                "robot_runtime_s": dict(self.resources.remaining_robot_runtime_s),
+                "shield_units": dict(self.resources.remaining_shield_units),
+                "decon_media": self.resources.remaining_decon_media,
+                "clean_water_l": self.resources.remaining_clean_water_l,
+                "wastewater_capacity_l": self.resources.remaining_wastewater_capacity_l,
+                "countermeasure_count": self.resources.remaining_countermeasure_count,
+            },
         }
 
     def write_workflow_artifact(self, path: str | Path | None = None) -> Path | None:

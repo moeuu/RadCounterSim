@@ -1,4 +1,4 @@
-"""Composable multi-detector radiation response models."""
+"""Detector electronics and response models consuming transported particle fields."""
 
 from __future__ import annotations
 
@@ -55,39 +55,42 @@ class DeadTimeModel(StrEnum):
     PARALYZABLE = "paralyzable"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ResponseCurve:
     energies_kev: tuple[float, ...]
     values: tuple[float, ...]
 
     def __post_init__(self) -> None:
-        if len(self.energies_kev) != len(self.values) or not self.values:
-            raise ValueError("response energy and value arrays must have equal non-zero length")
-        if any(value < 0.0 for value in self.values):
-            raise ValueError("response values must be non-negative")
-        if tuple(sorted(self.energies_kev)) != self.energies_kev:
-            raise ValueError("response energies must be sorted")
+        energies = np.asarray(self.energies_kev, dtype=np.float64)
+        values = np.asarray(self.values, dtype=np.float64)
+        if len(energies) < 2 or energies.shape != values.shape:
+            raise ValueError("response arrays must have equal length of at least two")
+        if (
+            not np.all(np.isfinite(energies))
+            or not np.all(np.isfinite(values))
+            or np.any(energies <= 0.0)
+            or np.any(np.diff(energies) <= 0.0)
+            or np.any(values < 0.0)
+        ):
+            raise ValueError("response energies/values must be finite, ordered, and nonnegative")
 
     def at(self, energy_kev: float) -> float:
-        return float(
-            np.interp(
-                energy_kev,
-                self.energies_kev,
-                self.values,
-                left=self.values[0],
-                right=self.values[-1],
+        if not math.isfinite(energy_kev):
+            raise ValueError("response energy must be finite")
+        if energy_kev < self.energies_kev[0] or energy_kev > self.energies_kev[-1]:
+            raise ValueError(
+                f"response curve does not cover incident energy {energy_kev:g} keV"
             )
-        )
+        return float(np.interp(energy_kev, self.energies_kev, self.values))
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ParticleResponse:
     radiation_type: RadiationType
-    intrinsic_efficiency: ResponseCurve
-    maximum_range_m: float | None = None
+    effective_area_m2: ResponseCurve
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DetectorDescriptor:
     model_id: str
     display_name: str
@@ -95,7 +98,6 @@ class DetectorDescriptor:
     directionality: Directionality
     outputs: tuple[DetectorOutput, ...]
     particle_responses: tuple[ParticleResponse, ...]
-    active_area_m2: float
     background_cps: float = 0.0
     dead_time_s: float = 0.0
     dead_time_model: DeadTimeModel = DeadTimeModel.NONPARALYZABLE
@@ -106,19 +108,30 @@ class DetectorDescriptor:
     field_of_view_half_angle_deg: float = 180.0
     off_axis_leakage_fraction: float = 1.0
     angular_power: float = 1.0
+    response_data_status: str = "synthetic_validation_only"
+    response_provenance: Mapping[str, str] | None = None
     metadata: Mapping[str, str | float | int | bool] | None = None
 
     def __post_init__(self) -> None:
-        if not self.model_id or self.active_area_m2 <= 0.0:
-            raise ValueError("detector model ID and positive active area are required")
+        if not self.model_id or not self.particle_responses:
+            raise ValueError("detector model ID and particle responses are required")
+        types = tuple(response.radiation_type for response in self.particle_responses)
+        if len(types) != len(set(types)):
+            raise ValueError("detector has duplicate responses for one radiation type")
         if self.background_cps < 0.0 or self.dead_time_s < 0.0:
-            raise ValueError("background and dead time must be non-negative")
+            raise ValueError("background and dead time must be nonnegative")
         if not 0.0 <= self.off_axis_leakage_fraction <= 1.0:
             raise ValueError("off-axis leakage must be in [0, 1]")
         if not 0.0 < self.field_of_view_half_angle_deg <= 180.0:
             raise ValueError("field of view must be in (0, 180]")
-        if self.energy_bin_edges_kev and len(self.energy_bin_edges_kev) < 2:
-            raise ValueError("a spectrum requires at least two bin edges")
+        edges = np.asarray(self.energy_bin_edges_kev, dtype=np.float64)
+        if len(edges) == 1 or (len(edges) >= 2 and np.any(np.diff(edges) <= 0.0)):
+            raise ValueError("spectrum bin edges must be empty or strictly increasing")
+        if self.response_data_status not in {
+            "synthetic_validation_only",
+            "experimentally_calibrated",
+        }:
+            raise ValueError("unsupported detector response data status")
 
     def response_for(self, radiation_type: RadiationType) -> ParticleResponse | None:
         return next(
@@ -131,7 +144,7 @@ class DetectorDescriptor:
         )
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DetectorPose:
     detector_id: str
     position_world_m: tuple[float, float, float]
@@ -152,93 +165,35 @@ class DetectorPose:
         return value / np.linalg.norm(value)
 
 
-@dataclass(frozen=True)
-class RadiationSample:
-    position_world_m: tuple[float, float, float]
-    emission_rate_per_s: float
+@dataclass(frozen=True, slots=True)
+class IncidentParticleFluence:
+    """One already-transported monoenergetic contribution at a detector."""
+
+    radiation_type: RadiationType
     energy_kev: float
-    radiation_type: RadiationType = RadiationType.GAMMA
+    fluence_rate_m2_s: float
+    arrival_direction_world: tuple[float, float, float]
     source_id: str = "source"
 
     def __post_init__(self) -> None:
-        if self.emission_rate_per_s < 0.0 or self.energy_kev < 0.0:
-            raise ValueError("radiation emission and energy must be non-negative")
-
-
-@dataclass(frozen=True)
-class ShieldPanel:
-    shield_id: str
-    center_world_m: tuple[float, float, float]
-    normal_world: tuple[float, float, float]
-    up_world: tuple[float, float, float]
-    width_m: float
-    height_m: float
-    thickness_m: float
-    attenuation_by_radiation: Mapping[RadiationType, ResponseCurve]
-
-    def __post_init__(self) -> None:
-        if self.width_m <= 0.0 or self.height_m <= 0.0 or self.thickness_m <= 0.0:
-            raise ValueError("shield dimensions must be positive")
-        normal = self._normal
-        up = self._up
-        if abs(float(np.dot(normal, up))) > 0.999:
-            raise ValueError("shield normal and up vectors cannot be parallel")
+        direction = np.asarray(self.arrival_direction_world, dtype=np.float64)
+        if (
+            not math.isfinite(self.energy_kev)
+            or self.energy_kev <= 0.0
+            or not math.isfinite(self.fluence_rate_m2_s)
+            or self.fluence_rate_m2_s < 0.0
+            or not np.all(np.isfinite(direction))
+            or np.linalg.norm(direction) <= 1e-12
+        ):
+            raise ValueError("incident particle contribution is invalid")
 
     @property
-    def _normal(self) -> np.ndarray:
-        value = np.asarray(self.normal_world, dtype=np.float64)
-        if np.linalg.norm(value) <= 1e-12:
-            raise ValueError("shield normal cannot be zero")
+    def normalized_arrival_direction(self) -> np.ndarray:
+        value = np.asarray(self.arrival_direction_world, dtype=np.float64)
         return value / np.linalg.norm(value)
 
-    @property
-    def _up(self) -> np.ndarray:
-        value = np.asarray(self.up_world, dtype=np.float64)
-        if np.linalg.norm(value) <= 1e-12:
-            raise ValueError("shield up cannot be zero")
-        value -= self._normal * np.dot(value, self._normal)
-        return value / np.linalg.norm(value)
 
-    def path_length_m(
-        self,
-        source_world_m: Sequence[float],
-        detector_world_m: Sequence[float],
-    ) -> float:
-        source = np.asarray(source_world_m, dtype=np.float64)
-        detector = np.asarray(detector_world_m, dtype=np.float64)
-        segment = detector - source
-        normal = self._normal
-        denominator = float(np.dot(segment, normal))
-        if abs(denominator) <= 1e-12:
-            return 0.0
-        fraction = float(np.dot(np.asarray(self.center_world_m) - source, normal) / denominator)
-        if fraction <= 0.0 or fraction >= 1.0:
-            return 0.0
-        hit = source + fraction * segment
-        relative = hit - np.asarray(self.center_world_m)
-        up = self._up
-        horizontal = np.cross(up, normal)
-        if abs(float(np.dot(relative, horizontal))) > self.width_m * 0.5:
-            return 0.0
-        if abs(float(np.dot(relative, up))) > self.height_m * 0.5:
-            return 0.0
-        direction = segment / np.linalg.norm(segment)
-        cosine = abs(float(np.dot(direction, normal)))
-        return self.thickness_m / max(cosine, 1e-6)
-
-    def transmission(
-        self,
-        sample: RadiationSample,
-        detector_world_m: Sequence[float],
-    ) -> float:
-        curve = self.attenuation_by_radiation.get(sample.radiation_type)
-        if curve is None:
-            return 1.0
-        path = self.path_length_m(sample.position_world_m, detector_world_m)
-        return math.exp(-curve.at(sample.energy_kev) * path)
-
-
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class DetectorReading:
     detector_id: str
     model_id: str
@@ -253,11 +208,10 @@ class DetectorReading:
     metadata: Mapping[str, float | str | bool] | None = None
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class MeasurementRequest:
     pose: DetectorPose
-    samples: tuple[RadiationSample, ...]
-    shields: tuple[ShieldPanel, ...]
+    incident_fluence: tuple[IncidentParticleFluence, ...]
     integration_time_s: float
     rng: np.random.Generator
 
@@ -269,48 +223,39 @@ class DetectorModel(Protocol):
 
 
 class ParametricDetectorModel:
+    """Apply detector response/electronics without performing radiation transport."""
+
     def __init__(self, descriptor: DetectorDescriptor) -> None:
         self.descriptor = descriptor
 
     def measure(self, request: MeasurementRequest) -> DetectorReading:
         if request.integration_time_s <= 0.0:
             raise ValueError("integration time must be positive")
-        detector_position = np.asarray(request.pose.position_world_m, dtype=np.float64)
         forward = request.pose.normalized_forward
-        contributions: list[tuple[RadiationSample, float, np.ndarray]] = []
+        contributions: list[tuple[IncidentParticleFluence, float, np.ndarray]] = []
         ideal_cps = self.descriptor.background_cps
         weighted_direction = np.zeros(3, dtype=np.float64)
-        dose_rate = 0.0
-
-        for sample in request.samples:
-            response = self.descriptor.response_for(sample.radiation_type)
-            if response is None or sample.emission_rate_per_s <= 0.0:
+        ideal_dose_rate = 0.0
+        for incident in request.incident_fluence:
+            response = self.descriptor.response_for(incident.radiation_type)
+            if response is None or incident.fluence_rate_m2_s <= 0.0:
                 continue
-            source_position = np.asarray(sample.position_world_m, dtype=np.float64)
-            vector = source_position - detector_position
-            distance = float(np.linalg.norm(vector))
-            if distance <= 1e-6:
-                distance = 1e-6
-            if response.maximum_range_m is not None and distance > response.maximum_range_m:
-                continue
-            unit_direction = vector / distance
-            angular_gain = self._angular_gain(float(np.dot(forward, unit_direction)))
+            direction = incident.normalized_arrival_direction
+            angular_gain = self._angular_gain(float(np.dot(forward, direction)))
             if angular_gain <= 0.0:
                 continue
-            transmission = math.prod(
-                shield.transmission(sample, detector_position) for shield in request.shields
-            )
-            efficiency = response.intrinsic_efficiency.at(sample.energy_kev)
-            geometric = self.descriptor.active_area_m2 / (4.0 * math.pi * distance * distance)
-            cps = sample.emission_rate_per_s * geometric * efficiency * angular_gain * transmission
-            contributions.append((sample, cps, unit_direction))
+            effective_area = response.effective_area_m2.at(incident.energy_kev)
+            cps = incident.fluence_rate_m2_s * effective_area * angular_gain
+            contributions.append((incident, cps, direction))
             ideal_cps += cps
-            weighted_direction += cps * unit_direction
-            dose_rate += (
-                cps * sample.energy_kev * self.descriptor.dose_conversion_usv_h_per_count_kev
+            weighted_direction += cps * direction
+            ideal_dose_rate += (
+                cps
+                * incident.energy_kev
+                * self.descriptor.dose_conversion_usv_h_per_count_kev
             )
-
-        measured_cps = self._apply_dead_time(ideal_cps)
+        dead_time_cps = self._apply_dead_time(ideal_cps)
+        measured_cps = dead_time_cps
         saturated = False
         if (
             self.descriptor.maximum_count_rate_cps is not None
@@ -318,15 +263,16 @@ class ParametricDetectorModel:
         ):
             measured_cps = self.descriptor.maximum_count_rate_cps
             saturated = True
+        electronics_scale = measured_cps / ideal_cps if ideal_cps > 0.0 else 1.0
         observed = int(request.rng.poisson(measured_cps * request.integration_time_s))
-        spectrum = self._spectrum(contributions, request)
-        direction = None
+        spectrum = self._spectrum(contributions, request, electronics_scale)
+        direction_result = None
         if (
             DetectorOutput.DIRECTION in self.descriptor.outputs
             or DetectorOutput.IMAGE in self.descriptor.outputs
         ) and np.linalg.norm(weighted_direction) > 0.0:
             unit = weighted_direction / np.linalg.norm(weighted_direction)
-            direction = tuple(float(value) for value in unit)
+            direction_result = tuple(float(value) for value in unit)
         return DetectorReading(
             detector_id=request.pose.detector_id,
             model_id=self.descriptor.model_id,
@@ -335,10 +281,14 @@ class ParametricDetectorModel:
             observed_counts=observed,
             spectrum_counts=spectrum,
             energy_bin_edges_kev=self.descriptor.energy_bin_edges_kev,
-            dose_rate_usv_h=dose_rate,
-            estimated_direction_world=direction,
+            dose_rate_usv_h=ideal_dose_rate * electronics_scale,
+            estimated_direction_world=direction_result,
             saturated=saturated,
-            metadata={"ideal_count_rate_cps": ideal_cps},
+            metadata={
+                "ideal_count_rate_cps": ideal_cps,
+                "input_representation": "transported_particle_fluence",
+                "response_data_status": self.descriptor.response_data_status,
+            },
         )
 
     def _angular_gain(self, cosine: float) -> float:
@@ -367,28 +317,34 @@ class ParametricDetectorModel:
 
     def _spectrum(
         self,
-        contributions: Sequence[tuple[RadiationSample, float, np.ndarray]],
+        contributions: Sequence[tuple[IncidentParticleFluence, float, np.ndarray]],
         request: MeasurementRequest,
+        electronics_scale: float,
     ) -> tuple[int, ...]:
         edges = self.descriptor.energy_bin_edges_kev
         if DetectorOutput.SPECTRUM not in self.descriptor.outputs or len(edges) < 2:
             return ()
         expected = np.zeros(len(edges) - 1, dtype=np.float64)
         resolution = self.descriptor.energy_resolution_fwhm_fraction_at_662kev
-        for sample, cps, _direction in contributions:
-            counts = cps * request.integration_time_s
+        for incident, cps, _direction in contributions:
+            counts = cps * electronics_scale * request.integration_time_s
             if resolution is None or resolution <= 0.0:
-                index = np.searchsorted(edges, sample.energy_kev, side="right") - 1
+                index = np.searchsorted(edges, incident.energy_kev, side="right") - 1
                 if 0 <= index < len(expected):
                     expected[index] += counts
                 continue
-            fwhm = resolution * math.sqrt(max(sample.energy_kev, 1e-9) / 662.0) * 662.0
+            fwhm = resolution * math.sqrt(incident.energy_kev / 662.0) * 662.0
             sigma = max(fwhm / 2.355, 1e-6)
             centers = (np.asarray(edges[:-1]) + np.asarray(edges[1:])) * 0.5
-            weights = np.exp(-0.5 * ((centers - sample.energy_kev) / sigma) ** 2)
+            weights = np.exp(-0.5 * ((centers - incident.energy_kev) / sigma) ** 2)
             if weights.sum() > 0.0:
                 expected += counts * weights / weights.sum()
-        expected += self.descriptor.background_cps * request.integration_time_s / len(expected)
+        expected += (
+            self.descriptor.background_cps
+            * electronics_scale
+            * request.integration_time_s
+            / len(expected)
+        )
         return tuple(int(value) for value in request.rng.poisson(expected))
 
 
@@ -416,14 +372,24 @@ class DetectorArray:
     def detector_ids(self) -> tuple[str, ...]:
         return tuple(self._models)
 
+    @property
+    def detector_positions(self) -> Mapping[str, tuple[float, float, float]]:
+        return {key: pose.position_world_m for key, pose in self._poses.items()}
+
     def measure(
         self,
-        samples: Sequence[RadiationSample],
+        incident_by_detector: Mapping[str, Sequence[IncidentParticleFluence]],
         *,
-        shields: Sequence[ShieldPanel] = (),
         integration_time_s: float = 1.0,
         seed: int | None = None,
     ) -> dict[str, DetectorReading]:
+        missing = set(self._models).difference(incident_by_detector)
+        extra = set(incident_by_detector).difference(self._models)
+        if missing or extra:
+            raise ValueError(
+                f"incident-field detector IDs do not match array; missing={sorted(missing)}, "
+                f"extra={sorted(extra)}"
+            )
         root_rng = np.random.default_rng(seed)
         readings = {}
         for detector_id, model in self._models.items():
@@ -431,8 +397,7 @@ class DetectorArray:
             readings[detector_id] = model.measure(
                 MeasurementRequest(
                     pose=self._poses[detector_id],
-                    samples=tuple(samples),
-                    shields=tuple(shields),
+                    incident_fluence=tuple(incident_by_detector[detector_id]),
                     integration_time_s=integration_time_s,
                     rng=np.random.default_rng(child_seed),
                 )

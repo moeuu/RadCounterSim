@@ -84,6 +84,48 @@ class FeasibilityFacts:
 
 
 @dataclass(frozen=True)
+class ActionOutcomeSamples:
+    """Matched public prediction samples for uncertainty-aware action scoring."""
+
+    task_path_dose_sv: tuple[float, ...]
+    peak_dose_rate_sv_h: tuple[float, ...]
+    residual_source_uncertainty: tuple[float, ...]
+    action_time_s: tuple[float, ...]
+    resource_cost: tuple[float, ...]
+    robot_execution_risk: tuple[float, ...]
+    information_gain: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        series = tuple(vars(self).values())
+        lengths = {len(values) for values in series}
+        if lengths == {0} or len(lengths) != 1:
+            raise ValueError("outcome sample arrays must have one common nonzero length")
+        if any(value < 0 for values in series for value in values):
+            raise ValueError("outcome samples must be nonnegative")
+
+    def objective_samples(self, weights: ObjectiveWeights) -> tuple[float, ...]:
+        return tuple(
+            weights.dose * dose
+            + weights.peak * peak
+            + weights.uncertainty * uncertainty
+            + weights.time * duration
+            + weights.resource * resource
+            + weights.risk * risk
+            - weights.information * information
+            for dose, peak, uncertainty, duration, resource, risk, information in zip(
+                self.task_path_dose_sv,
+                self.peak_dose_rate_sv_h,
+                self.residual_source_uncertainty,
+                self.action_time_s,
+                self.resource_cost,
+                self.robot_execution_risk,
+                self.information_gain,
+                strict=True,
+            )
+        )
+
+
+@dataclass(frozen=True)
 class ActionCandidate:
     """One action with public predicted metrics and feasibility facts."""
 
@@ -91,6 +133,7 @@ class ActionCandidate:
     metrics: ActionMetrics
     feasibility: FeasibilityFacts = FeasibilityFacts()
     tags: frozenset[str] = frozenset()
+    outcome_samples: ActionOutcomeSamples | None = None
 
 
 @dataclass(frozen=True)

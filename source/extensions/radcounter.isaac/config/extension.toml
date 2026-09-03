@@ -1,7 +1,7 @@
 [package]
 version = "0.2.0"
-title = "RadCounterSim"
-description = "Closed-loop radiation countermeasure simulation"
+title = "RadInterAct"
+description = "Scene-consistent radiological measurement and robotic intervention"
 category = "Simulation"
 keywords = ["isaac", "radiation", "robotics", "countermeasure"]
 

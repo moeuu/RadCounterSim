@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+import numpy as np
+
 from radcounter.core.environment import EnvironmentImportPipeline
 from radcounter.core.system_profiles import ResolvedSystemSelection
 
@@ -311,10 +313,31 @@ def _write_runtime_config(selection: ResolvedSystemSelection, stage_path: Path) 
             ),
             descriptor.particle_responses[0],
         )
+        response_energy = np.asarray(
+            response.effective_area_m2.energies_kev, dtype=np.float64
+        )
+        effective_area = np.asarray(
+            response.effective_area_m2.values,
+            dtype=np.float64,
+        )
+        if descriptor.energy_bin_edges_kev:
+            bin_edges = np.asarray(descriptor.energy_bin_edges_kev, dtype=np.float64)
+        else:
+            bin_edges = np.asarray((0.0, float(response_energy[-1]) * 1.001), dtype=np.float64)
+        response_matrix = np.zeros((len(response_energy), len(bin_edges) - 1), dtype=np.float64)
+        bin_indices = np.searchsorted(bin_edges, response_energy, side="right") - 1
+        bin_indices = np.clip(bin_indices, 0, len(bin_edges) - 2)
+        response_matrix[np.arange(len(response_energy)), bin_indices] = effective_area
+        background = np.full(
+            len(bin_edges) - 1,
+            descriptor.background_cps / (len(bin_edges) - 1),
+            dtype=np.float64,
+        )
         detectors[resolved.placement.detector_id] = {
-            "efficiency_energy_keV": list(response.intrinsic_efficiency.energies_kev),
-            "intrinsic_efficiency": list(response.intrinsic_efficiency.values),
-            "background_cps": descriptor.background_cps,
+            "energy_bin_edges_keV": bin_edges.tolist(),
+            "response_energy_keV": response_energy.tolist(),
+            "effective_area_m2_per_bin": response_matrix.tolist(),
+            "background_cps_per_bin": background.tolist(),
             "dead_time_s": descriptor.dead_time_s,
         }
     payload["scene"] = str(stage_path)

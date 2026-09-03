@@ -9,6 +9,7 @@ from radcounter.core.planning import (
     ActionCandidate,
     ActionCandidateGenerator,
     ActionMetrics,
+    ActionOutcomeSamples,
     ClosedLoopResidualPlanner,
     DeterministicFeasibilityChecker,
     FeasibilityFacts,
@@ -20,6 +21,7 @@ from radcounter.core.planning import (
     OraclePlanningContext,
     PlanningContext,
     RandomPlanner,
+    RiskAwareCountermeasurePlanner,
 )
 
 
@@ -119,3 +121,73 @@ def test_non_oracle_planners_do_not_reference_truth_state() -> None:
         tree = ast.parse((root / filename).read_text(encoding="utf-8"))
         names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
         assert "TruthState" not in names
+
+
+def test_water_treatment_requires_clean_water_and_wastewater_capacity() -> None:
+    candidate = ActionCandidate(
+        CountermeasureAction(
+            "wash",
+            ActionType.DECONTAMINATE,
+            "robot",
+            parameters={
+                "treatment_method": "water_jet",
+                "clean_water_l": 8.0,
+                "wastewater_l": 6.0,
+            },
+        ),
+        ActionMetrics(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0),
+    )
+    resources = ResourceState(
+        remaining_clean_water_l=7.0,
+        remaining_wastewater_capacity_l=5.0,
+    )
+    report = DeterministicFeasibilityChecker().evaluate(candidate, resources)
+    assert not report.feasible
+    assert "clean_water_exhausted" in report.reasons
+    assert "wastewater_capacity_exhausted" in report.reasons
+    clone = resources.clone()
+    assert clone.remaining_clean_water_l == 7.0
+    assert clone.remaining_wastewater_capacity_l == 5.0
+
+
+def test_water_treatment_fails_closed_without_explicit_resource_prediction() -> None:
+    candidate = ActionCandidate(
+        CountermeasureAction(
+            "wash",
+            ActionType.DECONTAMINATE,
+            "robot",
+            parameters={"treatment_method": "water_jet"},
+        ),
+        ActionMetrics(1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0),
+    )
+    report = DeterministicFeasibilityChecker().evaluate(candidate, ResourceState())
+    assert not report.feasible
+    assert report.reasons == ("water_resource_requirements_missing",)
+
+
+def test_risk_aware_planner_rejects_action_with_bad_upper_tail() -> None:
+    safe = _candidate("safe", ActionType.PLACE_SHIELD, task_dose=4.0, peak=0.0, distance=1.0)
+    risky = ActionCandidate(
+        _candidate("risky", ActionType.PLACE_SHIELD, task_dose=2.0, peak=0.0, distance=1.0).action,
+        ActionMetrics(2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
+        outcome_samples=ActionOutcomeSamples(
+            task_path_dose_sv=(1.0, 1.0, 1.0, 20.0),
+            peak_dose_rate_sv_h=(0.0,) * 4,
+            residual_source_uncertainty=(0.0,) * 4,
+            action_time_s=(0.0,) * 4,
+            resource_cost=(0.0,) * 4,
+            robot_execution_risk=(0.0,) * 4,
+            information_gain=(0.0,) * 4,
+        ),
+    )
+    context = PlanningContext(
+        _belief(),
+        (safe, risky),
+        ResourceState({"robot_s": 10.0}),
+        ObjectiveWeights(peak=0.0, uncertainty=0.0, time=0.0, resource=0.0, risk=0.0),
+    )
+    decision = RiskAwareCountermeasurePlanner(tail_probability=0.25, risk_aversion=1.0).plan(
+        context
+    )
+    assert decision is not None
+    assert decision.selected.action.action_id == "safe"

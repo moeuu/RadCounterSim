@@ -11,6 +11,7 @@ import tempfile
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -30,12 +31,28 @@ def _package_version(package: str) -> str | None:
         return None
 
 
+class EvidenceClass(StrEnum):
+    """What kind of evidence an experiment record is allowed to support."""
+
+    KINEMATIC_SCENE_EDIT = "kinematic_scene_edit"
+    PHYSICAL_ROBOT_EXECUTION = "physical_robot_execution"
+    ANALYTIC_VALIDATION = "analytic_validation"
+    INDEPENDENT_TRANSPORT_REFERENCE = "independent_transport_reference"
+    CONTROLLED_MEASUREMENT = "controlled_measurement"
+
+
 @dataclass(frozen=True, slots=True)
 class ExperimentCaseRecord:
     case_id: str
     seed: int
+    evidence_class: EvidenceClass
     metrics: Mapping[str, float | int | str | bool]
     parameters: Mapping[str, float | int | str | bool]
+
+    def __post_init__(self) -> None:
+        if not self.case_id or self.seed < 0:
+            raise ValueError("experiment case requires a nonempty ID and nonnegative seed")
+        object.__setattr__(self, "evidence_class", EvidenceClass(self.evidence_class))
 
 
 class ExperimentArtifactBundle:
@@ -48,18 +65,22 @@ class ExperimentArtifactBundle:
         *,
         stage_path: str | Path,
         config_path: str | Path,
+        evidence_class: EvidenceClass,
         metadata: Mapping[str, object] | None = None,
+        execution_runtime: Mapping[str, object] | None = None,
     ) -> None:
         self.run_id = run_id
         self.path = Path(output_root) / run_id
         self.cases_path = self.path / "cases"
         self.cases_path.mkdir(parents=True, exist_ok=False)
         self._records: list[ExperimentCaseRecord] = []
+        self.evidence_class = EvidenceClass(evidence_class)
         stage = Path(stage_path)
         config = Path(config_path)
         self.manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "run_id": run_id,
+            "evidence_class": self.evidence_class.value,
             "created_at_utc": datetime.now(UTC).isoformat(),
             "stage": {"path": str(stage), "sha256": sha256_file(stage)},
             "configuration": {"path": str(config), "sha256": sha256_file(config)},
@@ -71,6 +92,8 @@ class ExperimentArtifactBundle:
             },
             "metadata": dict(metadata or {}),
         }
+        if execution_runtime is not None:
+            self.manifest["execution_runtime"] = dict(execution_runtime)
         self._atomic_json(self.path / "manifest.json", self.manifest)
 
     @staticmethod
@@ -87,6 +110,11 @@ class ExperimentArtifactBundle:
             Path(temporary_name).unlink(missing_ok=True)
 
     def record(self, record: ExperimentCaseRecord) -> Path:
+        if record.evidence_class is not self.evidence_class:
+            raise ValueError(
+                f"case evidence_class={record.evidence_class.value!r} does not match "
+                f"bundle evidence_class={self.evidence_class.value!r}"
+            )
         if any(existing.case_id == record.case_id for existing in self._records):
             raise ValueError(f"duplicate experiment case_id: {record.case_id}")
         path = self.cases_path / f"{record.case_id}.json"

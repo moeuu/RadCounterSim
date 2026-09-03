@@ -101,6 +101,8 @@ def load_detector_descriptor(path: str | Path) -> DetectorDescriptor:
     payload = yaml.safe_load(source.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError("detector descriptor must be a mapping")
+    if payload.get("schema_version") != "2.0":
+        raise ValueError("detector descriptor requires schema_version 2.0")
     data = payload.get("detector", payload)
     responses = []
     for response_data in data["particle_responses"]:
@@ -109,20 +111,15 @@ def load_detector_descriptor(path: str | Path) -> DetectorDescriptor:
             energies, values = _read_response_csv(
                 (source.parent / response_data["response_csv"]).resolve(),
                 response_data.get("energy_column", "energy_kev"),
-                response_data.get("efficiency_column", "efficiency"),
+                response_data.get("effective_area_column", "effective_area_m2"),
             )
         else:
             energies = tuple(float(value) for value in response_data["energies_kev"])
-            values = tuple(float(value) for value in response_data["efficiency"])
+            values = tuple(float(value) for value in response_data["effective_area_m2"])
         responses.append(
             ParticleResponse(
                 radiation_type=radiation_type,
-                intrinsic_efficiency=ResponseCurve(energies, values),
-                maximum_range_m=(
-                    float(response_data["maximum_range_m"])
-                    if response_data.get("maximum_range_m") is not None
-                    else None
-                ),
+                effective_area_m2=ResponseCurve(energies, values),
             )
         )
     return DetectorDescriptor(
@@ -134,7 +131,6 @@ def load_detector_descriptor(path: str | Path) -> DetectorDescriptor:
             DetectorOutput(value) for value in data.get("outputs", ["counts", "count_rate"])
         ),
         particle_responses=tuple(responses),
-        active_area_m2=float(data["active_area_m2"]),
         background_cps=float(data.get("background_cps", 0.0)),
         dead_time_s=float(data.get("dead_time_s", 0.0)),
         dead_time_model=DeadTimeModel(data.get("dead_time_model", "nonparalyzable")),
@@ -155,6 +151,8 @@ def load_detector_descriptor(path: str | Path) -> DetectorDescriptor:
         field_of_view_half_angle_deg=float(data.get("field_of_view_half_angle_deg", 180.0)),
         off_axis_leakage_fraction=float(data.get("off_axis_leakage_fraction", 1.0)),
         angular_power=float(data.get("angular_power", 1.0)),
+        response_data_status=str(data.get("response_data_status", "")),
+        response_provenance=data.get("response_provenance"),
         metadata=data.get("metadata"),
     )
 

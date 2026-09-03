@@ -1,6 +1,17 @@
+schema_version: 1
 material_id: concrete
-data_status: requires_validated_xcom_export
-provenance: NIST XCOM values must be exported and versioned before research use
-energies_keV: [100.0, 500.0, 1000.0]
-linear_attenuation_m_inv: [0.0, 0.0, 0.0]
+data_status: authoritative_reference
+provenance:
+  source_name: NIST X-Ray Mass Attenuation Coefficients, Concrete Ordinary
+  source_url: https://physics.nist.gov/PhysRefData/XrayMassCoef/ComTab/concrete.html
+  database_version: XAAMDI online table
+  retrieved_on: 2026-08-29
+  density_g_cm3: 2.300
+  composition_reference: NIST Table 2, Concrete Ordinary
+  conversion: linear_attenuation_m_inv = mass_attenuation_cm2_g * density_g_cm3 * 100
+  valid_energy_range_keV: [100.0, 1500.0]
+  payload_sha256: 7461c3280407a423d535f9f57f27f2494158d5e5b193a0957ceaa7b86e34d286
+energies_keV: [100.0, 150.0, 200.0, 300.0, 400.0, 500.0, 600.0, 800.0, 1000.0, 1250.0, 1500.0]
+mass_attenuation_cm2_g: [0.1738, 0.1436, 0.1282, 0.1097, 0.09783, 0.08915, 0.08236, 0.07227, 0.06495, 0.05807, 0.05288]
+linear_attenuation_m_inv: [39.974, 33.028, 29.486, 25.231, 22.5009, 20.5045, 18.9428, 16.6221, 14.9385, 13.3561, 12.1624]
 geometry_mode: solid

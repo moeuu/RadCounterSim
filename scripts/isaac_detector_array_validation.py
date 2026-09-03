@@ -51,15 +51,20 @@ import omni.usd
 from isaacsim.core.api import World
 from isaacsim.core.utils.viewports import set_camera_view
 from pxr import Gf, Sdf, UsdGeom, UsdLux
+from radcounter.isaac.runtime.simulation import NativeStageTransport, RuntimeConfiguration
 
+from radcounter.core.models.radiation import MaterialSpec
+from radcounter.core.radiation import (
+    MaterialTable,
+    MultiParticleTransport,
+    ParticleEmissionSample,
+    ParticleTransportData,
+)
 from radcounter.core.sensors.plugins import DetectorRegistry
 from radcounter.core.sensors.universal import (
     DetectorArray,
     DetectorPose,
-    RadiationSample,
     RadiationType,
-    ResponseCurve,
-    ShieldPanel,
 )
 from radcounter.core.surface_decontamination import (
     DecontaminationTool,
@@ -116,13 +121,13 @@ def create_source(stage) -> tuple[SurfaceSourceGrid, list]:
     return grid, color_attributes
 
 
-def radiation_samples(grid: SurfaceSourceGrid) -> tuple[RadiationSample, ...]:
+def particle_emissions(grid: SurfaceSourceGrid) -> tuple[ParticleEmissionSample, ...]:
     samples = []
     for index, (position, activity) in enumerate(
         zip(grid.centers_world_m, grid.activity_bq, strict=True)
     ):
         samples.append(
-            RadiationSample(
+            ParticleEmissionSample(
                 tuple(float(value) for value in position),
                 float(activity * 0.851),
                 662.0,
@@ -131,7 +136,7 @@ def radiation_samples(grid: SurfaceSourceGrid) -> tuple[RadiationSample, ...]:
             )
         )
         samples.append(
-            RadiationSample(
+            ParticleEmissionSample(
                 tuple(float(value) for value in position),
                 float(activity * 0.055),
                 32.0,
@@ -142,34 +147,22 @@ def radiation_samples(grid: SurfaceSourceGrid) -> tuple[RadiationSample, ...]:
     return tuple(samples)
 
 
-def create_shield(stage) -> tuple[ShieldPanel, object]:
-    panel = ShieldPanel(
-        "lead_panel",
-        center_world_m=(1.30, 0.20, 0.55),
-        normal_world=(1.0, 0.0, 0.0),
-        up_world=(0.0, 0.0, 1.0),
-        width_m=2.4,
-        height_m=1.4,
-        thickness_m=0.05,
-        attenuation_by_radiation={
-            RadiationType.GAMMA: ResponseCurve(
-                (30.0, 100.0, 662.0, 1500.0, 3000.0),
-                (950.0, 520.0, 120.0, 75.0, 52.0),
-            )
-        },
-    )
+def create_shield(stage) -> object:
+    center_world_m = (1.30, 0.20, 0.55)
+    width_m = 2.4
+    height_m = 1.4
+    thickness_m = 0.05
     cube = UsdGeom.Cube.Define(stage, "/World/LeadShield")
     cube.CreateSizeAttr(1.0)
-    cube.AddTranslateOp().Set(Gf.Vec3d(*panel.center_world_m))
+    cube.AddTranslateOp().Set(Gf.Vec3d(*center_world_m))
     cube.AddScaleOp().Set(
-        Gf.Vec3f(panel.thickness_m * 0.5, panel.width_m * 0.5, panel.height_m * 0.5)
+        Gf.Vec3f(thickness_m * 0.5, width_m * 0.5, height_m * 0.5)
     )
     set_color(cube, (0.18, 0.20, 0.23))
     prim = cube.GetPrim()
     prim.CreateAttribute("rad:role", Sdf.ValueTypeNames.String).Set("shield")
-    prim.CreateAttribute("rad:material:id", Sdf.ValueTypeNames.String).Set("lead")
     UsdGeom.Imageable(prim).MakeInvisible()
-    return panel, prim
+    return prim
 
 
 def detector_layout(registry: DetectorRegistry):
@@ -326,9 +319,32 @@ def main() -> int:
         world.scene.add_default_ground_plane()
         stage = omni.usd.get_context().get_stage()
         grid, color_attributes = create_source(stage)
-        shield, shield_prim = create_shield(stage)
+        shield_prim = create_shield(stage)
         registry = DetectorRegistry()
         array, entries = detector_layout(registry)
+        material_spec = MaterialSpec(
+            "lead",
+            np.asarray((30.0, 100.0, 662.0, 1500.0, 3000.0)),
+            np.asarray((950.0, 520.0, 120.0, 75.0, 52.0)),
+        )
+        material_table = MaterialTable((material_spec,))
+        transport_backend = NativeStageTransport(
+            stage,
+            RuntimeConfiguration(
+                materials={
+                    "lead": (material_spec.energies_keV, material_spec.linear_attenuation_m_inv)
+                },
+                isotopes={},
+                detectors={},
+                duration_s=1.0,
+                minimum_distance_m=0.01,
+                seed=1,
+            ),
+        )
+        particle_transport = MultiParticleTransport(
+            transport_backend,
+            ParticleTransportData(material_table, {}, {}),
+        )
         create_detector_visuals(stage, entries, registry)
         robot_translate = create_decon_robot(stage)
         light = UsdLux.DistantLight.Define(stage, "/World/KeyLight")
@@ -360,14 +376,20 @@ def main() -> int:
         start_wall = time.monotonic()
         next_frame = start_wall
         last_log_second = -1
+        shield_transport_enabled = False
 
         while simulation_app.is_running():
             elapsed = time.monotonic() - start_wall
             if elapsed >= ARGS.duration:
                 break
             shield_active = elapsed >= 4.0
-            if shield_active:
+            if shield_active and not shield_transport_enabled:
                 UsdGeom.Imageable(shield_prim).MakeVisible()
+                shield_prim.CreateAttribute(
+                    "rad:material:id", Sdf.ValueTypeNames.String
+                ).Set("lead")
+                transport_backend.synchronize_transforms()
+                shield_transport_enabled = True
             phase = "baseline"
             if shield_active:
                 phase = "lead shield installed"
@@ -398,9 +420,11 @@ def main() -> int:
                         ).Set(float(grid.activity_bq[index]))
 
             if elapsed >= next_measurement_s or current is None:
+                incident = particle_transport.transport(
+                    particle_emissions(grid), array.detector_positions
+                )
                 current = array.measure(
-                    radiation_samples(grid),
-                    shields=(shield,) if shield_active else (),
+                    incident,
                     integration_time_s=1.0,
                     seed=10_000 + measurement_index,
                 )
@@ -438,8 +462,9 @@ def main() -> int:
                 time.sleep(sleep_s)
 
         final = array.measure(
-            radiation_samples(grid),
-            shields=(shield,),
+            particle_transport.transport(
+                particle_emissions(grid), array.detector_positions
+            ),
             integration_time_s=1.0,
             seed=99_999,
         )

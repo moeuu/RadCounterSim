@@ -1,4 +1,4 @@
-"""Isaac Sim-independent RadCounterSim core."""
+"""Isaac Sim-independent RadInterAct core."""
 
 from radcounter.core.models import BeliefState, RevisionState, TruthState
 

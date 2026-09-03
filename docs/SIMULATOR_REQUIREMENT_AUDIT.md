@@ -1,82 +1,95 @@
-# RadCounterSim simulator requirement audit
+# RadInterAct simulator requirement audit
 
-Audit date: 2026-08-06
+Audit date: 2026-08-29
 
-## Scope and verdict
+## Verdict
 
-The simulator's core architecture, radiation transport, countermeasure actions,
-closed-loop workflow, ROS 2 adapters, and articulated Isaac execution are
-implemented. The implementation specification is nevertheless **not literally
-100% complete**.
+The requested simulator capabilities are implemented. The remaining work is
+scientific calibration and data collection, not another software feature
+expansion. A capability is therefore reported with two independent statuses:
 
-The remaining required gaps are continuous point-source position/activity MLE
-refinement and the complete eight-section operational UI/visualization surface.
-The current dashboard loads the articulated scene, synchronizes the radiation
-runtime, authors explicitly authorized sources, measures detectors, renders a
-dose proxy, and displays externally supplied estimate/residual/plan artifacts.
-It does not yet run estimation, action preview/execution, closed-loop control, or
-experiment configuration directly from the GUI, and it lacks the specified
-source-uncertainty, residual-map, selected-ray, and action overlays. The exact
-performance-target matrix in section 29.3 also has not been recorded; the live
-performance gate validates cache behavior on a smaller workload with a looser
-limit.
+- **Implemented** means that the code path, validation, and artifact contract
+  exist.
+- **Research-ready** means that the exact run uses authoritative or measured
+  inputs whose provenance and hashes satisfy the research-data gate.
 
-`PFPlusMLEEstimator` remains an optional-phase item in the specification and is
-not implemented. Dependency locking uses `uv.lock` rather than the spec's
-suggested `requirements-lock.txt`.
+The checked-in vertical-slice configuration is intentionally
+`synthetic_validation_only`. It demonstrates implementation consistency and
+physical scene execution; it is not evidence of detector or material accuracy.
 
-## Requirement matrix
+## Final capability audit
 
-| Requirement | Status | Implementation and executable evidence |
+| Capability | Implementation | Research boundary |
 | --- | --- | --- |
-| Independent core/native/Isaac layering | Complete | `radcounter/core`, `native`, and `source/extensions/radcounter.isaac`; extension-load gate |
-| Truth/Belief separation | Complete | `TruthState`, `BeliefState`, estimator-visible USD registry, `PublicMeasurement`; non-oracle planner truth-isolation tests |
-| Point/surface/volume sources | Complete | Canonical `rad:*` metadata, USD registry, runtime sampling, dashboard volume-source gate |
-| Surface-activity NPZ sidecar | Complete | Triangle mapping, cumulative exposure, last-treated step, SHA-256 validation, atomic replacement |
-| Dynamic Embree transport | Complete | Finite segments, material path lengths, solid and thin-sheet modes, grazing clamp, real Embree instances, transform/remove/commit, 8-wide packet tracing and tail handling |
-| Revision and transfer-map caching | Complete | Geometry/material/source-pose/source-activity/detector revisions; activity-only zero-ray update; finite-AABB selective ray patching |
-| Detector models | Complete | Omnidirectional state machine, Poisson counts, background, dead time, dose conversion, rotating physical-geometry and response-mask modes |
-| Physical decontamination | Complete | Tool-footprint ray contacts, distance/normal/speed checks, exposure kinetics, correlated truth efficiency, waste transfer/discard, recontamination, activity-map persistence |
-| Shield placement and correction | Complete | Full lifecycle, FixedJoint grasp/release, actual settled USD pose, pose error, Embree synchronization, verification measurement |
-| Object move and removal | Complete | Local-frame attached sources, physical pick/place, disposal-class/zone validation, source/manipulation disable only after arrival while retaining the PhysX prim |
-| Deterministic and PhysX controllers | Complete | Portable deterministic controller, Isaac rigid/articulation controller, grasp frames, settle checks, reachability/IK adapter |
-| Scene-derived action candidates | Complete | Measurement/decon/shield/move/remove generation with visibility-graph obstacle-avoiding routes, workspace, grasp, collision, support, disposal, parking-slot, and resource feasibility checks; dose terms use Belief only |
-| Closed-loop execution | Complete | Measure -> injected estimate -> plan -> physical action -> synchronize -> remeasure -> residual -> belief update in `IsaacWorkflowServices` |
-| Physics-step integration | Complete | Lifecycle-safe PhysX event subscription and periodic radiation synchronization |
-| ROS 2 integration | Complete | Messages/actions/services, Nav2, MoveIt 2, FollowJointTrajectory, gripper, cancellation/error propagation, Isaac DDS command host |
-| UI and artifacts | Partial | Scene/runtime/source/measurement/dose-proxy controls and estimate/residual/plan artifact views exist; the specified Estimation, Countermeasure, Closed Loop, Visualization, and Experiment controls are not complete |
-| Visualization layers | Partial | Batched point-based dose proxy exists; source uncertainty, predicted/observed post-action, residual-map, selected-ray material path, and action overlays are not implemented as the specified layers |
-| Experiments and reproducibility | Complete | Seeded batch runner, JSON/JSONL/Parquet/report artifacts, regression bounds, vertical-slice multi-seed runner |
-| Vertical-slice scenario | Complete | Room, surface source, hidden contaminated object, measurement/countermeasure robots, shield, decon patch, movable obstacle, verification stations |
-| Grid Poisson sparse and surface-TV estimators | Complete | Nonnegative Poisson MLE/L1, smooth graph-TV, connected components, Fisher covariance, and bootstrap are unit-tested and consumed through an injected estimator callback |
-| Fisher uncertainty and residual hypotheses | Existing | Active-set Fisher covariance, bootstrap, decon/shield/hidden-source/gain/source-location residual handling and belief updates |
-| Planner baselines | Existing | Open-loop, greedy dose reduction, nearest source, random, oracle, and closed-loop residual planners |
-| Continuous point-source position/activity MLE | Missing | Coarse sparse estimation and connected-component summaries exist, but no continuous-coordinate refinement follows them |
-| Concrete PF+MLE estimator | Optional / missing | A generic `SourceEstimator` protocol exists; no concrete particle-filter estimator is implemented |
-| Section 29.3 performance matrix | Not demonstrated | Cache and selective invalidation are live-tested, but the four exact target workloads/timings are not captured by the current benchmark suite |
+| Shared mutable scene | Complete | USD is the authored source of geometry, material labels, source metadata, and per-face activity; PhysX and Embree consume synchronized derivatives. |
+| Point, surface, and volume sources | Complete | Surface treatment, visualization, and radiation sampling use the same irregular activity-bearing mesh. |
+| Photon transport | Complete | Energy-dependent primary gamma/X-ray attenuation is implemented. A corrected run must load a hash-bound buildup surface covering every traversed material, energy, and optical depth; missing coverage fails. |
+| Other radiation types | Complete | Neutron removal and alpha/beta range kernels share the scene path provider. They are reduced-order models and retain their data classification. |
+| Detector response | Complete | Incident transported fluence is passed through effective-area response curves/matrices, background, angular response, energy redistribution, dead time, saturation, and Poisson sampling. Detector code cannot perform private transport. The physical rotating-shield path authors the configured USD posture, synchronizes its tagged attenuation mesh, and then calls this same response path. |
+| Detector catalog | Complete | Eighteen built-in models cover nine families, six directionalities, gamma/X-ray, neutron, alpha, and beta responses; custom and external-reading adapters use the same schema. |
+| Dynamic radiation updates | Complete | Transform, material, source-pose, source-presence, and per-face activity changes invalidate only affected cached rays and update subsequent observations. |
+| Dry surface treatment | Complete | Contact distance, surface normal, speed, footprint, and dwell control a material-parameterized removal model with explicit waste activity and balance checks. |
+| Water treatment | Complete | A reduced-order nozzle/wetting/removal/recovery/runoff model tracks clean water, wastewater, redeposition, discharge, and activity balance on the visible irregular mesh. It does not claim CFD fidelity. |
+| Shield placement and correction | Complete | An articulated mobile manipulator grasps, transports, releases, and settles the shield; its settled pose changes Embree paths. |
+| Object relocation and disposal | Complete | Per-object grasp, stand-off, parking, and root-placement metadata replace array-order conventions. Disposal retains the source inside explicit shielding instead of deleting it. |
+| Physical execution | Complete | Ridgeback + Franka and Nova Carter use wheel and arm joints, Lula IK, gripper closure, payload constraints, contact, collision, and settling checks. |
+| Kinematic scene editing | Complete and isolated | Direct USD pose/source edits are valid for `kinematic_scene_edit` experiments only. They are never relabeled or automatically substituted for `physical_robot_execution`. |
+| Feasibility and resources | Complete | Live-scene reachability, collision, route, stability, disposal containment, time, runtime, shield, media, water, wastewater, and operation-count constraints fail closed. |
+| Estimation | Complete | Grid Poisson/L1/TV, Fisher/bootstrap uncertainty, continuous position/activity MLE, particle-assisted MLE, and a public-observation Isaac estimator are implemented. Hidden simulator sources are rejected. |
+| Action selection | Complete | Deterministic resource- and risk-aware selection plus versioned comparison policies are implemented. Candidate generation uses public estimates and live scene contracts. |
+| Application integrations | Complete | Dashboard visualization/controls, strict local natural-language commands, ROS 2 adapters, external detector readings, environment import, and generic robot descriptions are implemented. |
+| Evidence artifacts | Complete | Seed, evidence class, stage/config/data hashes, operation results, spectra, estimation residuals, resources, timing, transport counters, activity balances, and the executing Isaac/Embree/renderer/GPU/driver versions are recorded. |
+| Paper collector | Complete | The collector rejects failed/incomplete runs, mixed evidence, duplicate seeds, stage or data hash mismatches, synthetic inputs in research mode, missing operation classes, non-native transport, invalid balances, all-zero physical execution time, missing runtime identity, and pooled runs from different execution runtimes. |
 
-## Validation evidence
+## Paper-facing decision
 
-- `uv lock --check`: passed.
-- `uv run ruff check .`: passed with zero violations (163 repository-wide
-  violations fixed in this audit pass).
-- Portable pytest suite: 142 passed, 3 skipped. The skipped tests require the
-  optional native Embree module in the active `uv` environment; the native host
-  build/runtime gate has separate passing evidence.
-- Native Embree build and integration tests: passed, including a 17-ray packet/tail case.
-- ROS 2 `colcon` build: passed.
-- ROS DDS motion gateway gate: passed for Nav2, MoveIt 2, FollowJointTrajectory, gripper, cancellation/result handling.
-- Isaac extension-load, vertical-slice, performance/cache, PhysX action/contact-decon, articulation/IK-contract, dashboard, and closed-loop workflow gates: passed.
-- Cross-process ROS 2 to Isaac command-host gate: passed.
-- Visible Isaac Sim GUI end-to-end articulated run: passed all 8 operations and
-  all 13 final invariants with a 12-DOF Ridgeback + Franka and 7-DOF Nova
-  Carter; 61 native traces, 157 traced rays, 102 cache hits, and 89 selectively
-  patched rays.
+The paper evaluates the scene-consistent simulator, not every optional platform
+adapter. Its main articulated scenario contains:
 
-The articulation-contract gate still validates an injected deterministic IK
-solver. In addition, `real_robot_gate.py`, `articulated_object_gate.py`, and the
-full GUI workflow execute the manufacturer Franka asset with Isaac's supported
-Lula kinematics configuration. This remains simulation validation and does not
-claim physical-hardware validation.
+1. Cs-137 gamma measurement with an omnidirectional detector in the articulated
+   scenario and a separate physical-geometry rotating-shield angular program;
+2. contact-conditioned dry treatment of an irregular wall source;
+3. shield placement and repositioning;
+4. contaminated-object relocation and shielded disposal;
+5. a final measurement after the scene and activity changes.
 
-`AnalyticHostBridge` remains intentionally available as a portable baseline. The actual simulator path uses `IsaacRos2CommandHost`; retaining the analytic bridge is not a fallback in the validated Isaac/ROS gate.
+Water treatment, additional particles and detector models, source-estimation
+variants, action-selection variants, natural-language control, ROS 2, and
+generic robots remain implemented extension capabilities. They enter the main
+paper only if their own calibrated inputs and quantitative evaluation are
+completed; otherwise they are reported as platform support, not as validated
+scientific results.
+
+The complete scope and metric contract is recorded in
+[`paper-simulator-scope.md`](paper-simulator-scope.md).
+
+## Current executable evidence
+
+- Portable Python suite: 277 passed and 6 native-only cases skipped in the
+  portable environment. The same 6 Embree integration cases passed after the
+  native host environment was loaded.
+- Twelve Isaac gates cover extension load, dynamic scene synchronization,
+  physical rotating shielding, performance, visualization, dashboard controls,
+  workflow services, physics actions, articulated robots, and object
+  manipulation.
+- The rotating-shield gate changed the same lead mesh at all four postures.
+  Its direct-geometry component evidence is labeled `kinematic_scene_edit`;
+  the shielded posture produced 4.103 cps versus 360,752.329 cps at the three
+  unobstructed postures under synthetic inputs.
+- The seed-11 articulated scenario completed all eight operation phases and 11
+  physical action records with `physical_robot_execution` evidence. It reports
+  228.150 s of simulated action time, maximum final-pose error of 0.002470 m,
+  treatment coverage of 0.780684, 4,453,052.664 Bq removed, and activity-balance
+  error of -4.657e-9 Bq.
+- Native transport in that run recorded 95 trace calls, 13,999 rays, 532 cache
+  hits, and 6,016 selectively updated rays.
+- The paper collector accepted the runtime-identified synthetic artifact at
+  `artifacts/gui-validation/paper-seed-11-runtime.json` and wrote immutable
+  outputs under `artifacts/paper-evaluation/synthetic-seed-11-runtime/`.
+- The execution manifest records Isaac Sim 6.0.1.0, Embree 4.3.0,
+  `RealTimePathTracing`, an NVIDIA GeForce RTX 5090, and driver 580.173.02.
+
+This evidence establishes software and simulated-operation behavior. Quantified
+scientific accuracy still requires the research-calibration work listed in the
+scope document. The accepted paper bundle contains one seed and therefore does
+not establish repeatability or sampling uncertainty.

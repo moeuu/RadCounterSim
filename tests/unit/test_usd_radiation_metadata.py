@@ -12,6 +12,7 @@ from radcounter.core.scene import (
     SourceType,
     SurfaceActivityMap,
     UsdRadiationAttributes,
+    VolumeActivityMap,
     classify_stage_changes,
 )
 
@@ -22,6 +23,7 @@ def _activity_map() -> SurfaceActivityMap:
         activity_bq=np.array([100.0, 50.0]),
         cumulative_treatment_exposure=np.zeros(2),
         last_treated_step=np.full(2, -1, dtype=np.int64),
+        verified_contact_dwell_s=np.zeros(2),
     )
 
 
@@ -45,6 +47,7 @@ def test_activity_map_round_trip_digest_and_treatment(tmp_path: Path) -> None:
     assert loaded.activity_bq[1] == pytest.approx(50.0 - removed[0])
     assert loaded.cumulative_treatment_exposure[1] == pytest.approx(2.0)
     assert loaded.last_treated_step[1] == 12
+    assert loaded.verified_contact_dwell_s[1] == 0.0
 
 
 def test_activity_map_rejects_digest_mismatch(tmp_path: Path) -> None:
@@ -56,6 +59,25 @@ def test_activity_map_rejects_digest_mismatch(tmp_path: Path) -> None:
             base_directory=tmp_path,
             expected_sha256="0" * 64,
         )
+
+
+def test_volume_activity_map_requires_digest_and_valid_voxels(tmp_path: Path) -> None:
+    path = tmp_path / "volume.npz"
+    np.savez_compressed(
+        path,
+        voxel_centers_local_m=np.asarray(((0.0, 0.0, 0.0), (0.2, 0.1, -0.1))),
+        activity_bq_per_voxel=np.asarray((12.0, 8.0)),
+    )
+    from radcounter.core.scene import sha256_file
+
+    loaded = VolumeActivityMap.load(
+        path.name,
+        base_directory=tmp_path,
+        expected_sha256=sha256_file(path),
+    )
+    assert loaded.activity_bq_per_voxel.sum() == pytest.approx(20.0)
+    with pytest.raises(ActivityMapIntegrityError, match="SHA256 is required"):
+        VolumeActivityMap.load(path.name, base_directory=tmp_path, expected_sha256="")
 
 
 def test_hidden_source_is_excluded_from_estimator_view() -> None:
@@ -107,4 +129,11 @@ def test_resync_is_conservative_and_metadata_names_are_canonical() -> None:
         registry_refresh=True,
     )
     assert UsdRadiationAttributes.SOURCE_ACTIVITY_MAP_URI == "rad:source:activityMapUri"
+    assert UsdRadiationAttributes.SOURCE_VOLUME_DISTRIBUTION == (
+        "rad:source:volumeDistribution"
+    )
     assert UsdRadiationAttributes.MANIPULATION_REMOVABLE == "rad:manipulation:removable"
+    assert (
+        UsdRadiationAttributes.DECON_TREATMENT_MODEL_SHA256
+        == "rad:decon:treatmentModelSha256"
+    )

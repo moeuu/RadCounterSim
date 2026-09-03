@@ -34,6 +34,35 @@ def test_real_robot_assets_and_motion_gate_are_declared() -> None:
     assert "FixedJoint.Define" in source
 
 
+def test_high_wall_video_places_independent_h100_rover_and_uses_live_source_activity() -> None:
+    source = (ROOT / "scripts/isaac_surface_decon_validation.py").read_text(encoding="utf-8")
+    assert 'MEASUREMENT_ROBOT_PATH = "/World/H100MeasurementRover"' in source
+    assert "create_h100_measurement_robot" in source
+    assert '"rad:measurement:independentPlatform"' in source
+    assert '"rad:detector:directionality"' in source
+    assert '"omnidirectional"' in source
+    assert "zip(grid.centers_world_m, grid.activity_bq, strict=True)" in source
+    assert "float(activity_bq) * 0.851 / (4.0 * math.pi * distance_squared_m2)" in source
+    assert "_write_h100_telemetry" in source
+    assert "expected_count_rate_cps" in source
+    assert "subtitles=filename=" in source
+
+
+def test_physics_reports_are_explicitly_classified_as_robot_execution() -> None:
+    from radcounter.isaac.robot import (
+        ArticulatedTaskReport,
+        PhysicsActionReport,
+        RobotExecutionState,
+    )
+
+    from radcounter.core.experiments import EvidenceClass
+
+    physics = PhysicsActionReport(RobotExecutionState.COMPLETE, True, 1, "done")
+    articulated = ArticulatedTaskReport("complete", True, 1, "done")
+    assert physics.evidence_class is EvidenceClass.PHYSICAL_ROBOT_EXECUTION
+    assert articulated.evidence_class is EvidenceClass.PHYSICAL_ROBOT_EXECUTION
+
+
 def test_robot_configs_select_real_isaac_controllers() -> None:
     root = Path(__file__).resolve().parents[2]
     countermeasure = yaml.safe_load(
@@ -109,6 +138,8 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     assert "continuous boustrophedon/serpentine raster" in rules
     assert "Sample the full physical pad footprint densely enough" in rules
     assert "ray count is spatial sampling density, not elapsed time" in rules
+    assert "no treatment exposure or" in rules
+    assert "dwell-qualified faces" in rules
     assert "planned sweep" in rules
     assert "same irregular activity-bearing mesh" in rules
     assert "Never show a regular rectangular coverage proxy" in rules
@@ -118,6 +149,8 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
         root / "source/extensions/radcounter.isaac/radcounter/isaac/robot/decontamination.py"
     ).read_text(encoding="utf-8")
     assert "effective_contact_exposure_s" in contact_model
+    assert "verified_contact_dwell_s" in contact_model
+    assert "eligible_contact_s" in contact_model
     assert "def _update_surface_visuals" in contact_model
     assert "opacity_attr.Set([0.0 if value < 0.10" in contact_model
     assert "count / footprint_count" not in contact_model
@@ -139,11 +172,15 @@ def test_gui_validation_uses_articulated_motion_without_tool_teleport() -> None:
     ).read_text(encoding="utf-8")
     assert "live_candidates = generator.generate_measurement_actions(belief)" in source
     assert "generator.probe.invalidate_collision_cache()" in source
-    assert "object_end_effector_offset_m=(0.90, 0.0, 0.0)" in source
+    assert "object_end_effector_offset_m" not in source
+    assert '"rad:manipulation:baseStandOffM"' in controller
+    assert '"rad:manipulation:parkingOffsetM"' in controller
+    assert '"rad:manipulation:placementReference"' in controller
     planner_source = (
         root / "source/extensions/radcounter.isaac/radcounter/isaac/planning/scene_candidates.py"
     ).read_text(encoding="utf-8")
-    assert "removal_pickup_yaw = math.pi" in planner_source
+    assert "yaws = (math.pi, 0.0, math.pi / 2.0, -math.pi / 2.0)" in planner_source
+    assert "for removal_pickup_yaw in yaws" in planner_source
     assert "removal_grasp = removal_root + grasp_from_root" in planner_source
     assert "removal_grasp_offset" not in planner_source
     assert "create_decontamination_activity_map(activity_path)" in (

@@ -3,6 +3,7 @@
 from radcounter.core.scene.activity_map import (
     ActivityMapIntegrityError,
     SurfaceActivityMap,
+    VolumeActivityMap,
     resolve_asset_uri,
     sha256_file,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "SourceDescriptor",
     "SourceType",
     "SurfaceActivityMap",
+    "VolumeActivityMap",
     "UsdRadiationAttributes",
     "classify_stage_changes",
     "resolve_asset_uri",

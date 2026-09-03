@@ -17,7 +17,7 @@ if omni is not None:
     from radcounter.isaac.ui.window import RadCounterWindow, WindowCallbacks
 
     class RadCounterExtension(omni.ext.IExt):
-        """Own the RadCounterSim window and Isaac timeline session."""
+        """Own the RadInterAct window and Isaac timeline session."""
 
         def on_startup(self, ext_id: str) -> None:
             self.ext_id = ext_id

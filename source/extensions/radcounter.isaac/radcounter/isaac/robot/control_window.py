@@ -12,7 +12,7 @@ class RobotControlWindow:
 
         self.router = router
         self.robot_id = robot_id
-        self.window = ui.Window("RadCounterSim Robot Control", width=430, height=330)
+        self.window = ui.Window("RadInterAct Robot Control", width=430, height=330)
         with self.window.frame, ui.VStack(spacing=8):
             ui.Label(
                 "W/S forward  A/D turn  Q/E strafe",

@@ -69,6 +69,7 @@ class DecontaminationTool:
     rate_constant_s_inv: float
     max_contact_distance_m: float
     max_surface_speed_m_s: float
+    minimum_contact_dwell_s: float = 0.0
 
     def __post_init__(self) -> None:
         values = (
@@ -78,8 +79,12 @@ class DecontaminationTool:
             self.max_contact_distance_m,
             self.max_surface_speed_m_s,
         )
-        if any(value <= 0.0 for value in values):
+        if any(value <= 0.0 or not math.isfinite(value) for value in values):
             raise ValueError("decontamination tool parameters must be positive")
+        if self.minimum_contact_dwell_s < 0.0 or not math.isfinite(
+            self.minimum_contact_dwell_s
+        ):
+            raise ValueError("minimum_contact_dwell_s must be finite and nonnegative")
 
 
 @dataclass(frozen=True)
@@ -153,6 +158,7 @@ class SurfaceSourceGrid:
         self.initial_activity_bq = initial.copy()
         self.activity_bq = initial.copy()
         self.cumulative_exposure_s = np.zeros(xx.size, dtype=np.float64)
+        self.verified_contact_dwell_s = np.zeros(xx.size, dtype=np.float64)
 
         if efficiency_field is None:
             efficiency = np.ones(xx.size, dtype=np.float64)
@@ -217,12 +223,20 @@ class SurfaceSourceGrid:
         if not len(indices):
             return DecontaminationStep((), activity_before, activity_before, 0.0, 0.0)
 
-        effective_dwell = effective_contact_exposure_s(
+        effective_contact = effective_contact_exposure_s(
             dt_s,
             surface_speed_m_s,
             tool.max_surface_speed_m_s,
         )
-        self.cumulative_exposure_s[indices] += effective_dwell
+        previous_dwell = self.verified_contact_dwell_s[indices].copy()
+        current_dwell = previous_dwell + dt_s
+        self.verified_contact_dwell_s[indices] = current_dwell
+        eligible_contact_time = np.maximum(
+            current_dwell - tool.minimum_contact_dwell_s,
+            0.0,
+        ) - np.maximum(previous_dwell - tool.minimum_contact_dwell_s, 0.0)
+        incremental_exposure = effective_contact * eligible_contact_time / dt_s
+        self.cumulative_exposure_s[indices] += incremental_exposure
         exponent = (
             -tool.rate_constant_s_inv
             * self.efficiency[indices]
@@ -235,7 +249,7 @@ class SurfaceSourceGrid:
             activity_before_bq=activity_before,
             activity_after_bq=activity_after,
             removed_activity_bq=max(0.0, activity_before - activity_after),
-            effective_dwell_s=effective_dwell,
+            effective_dwell_s=float(np.max(incremental_exposure, initial=0.0)),
         )
 
     def color_rgb(self) -> np.ndarray:

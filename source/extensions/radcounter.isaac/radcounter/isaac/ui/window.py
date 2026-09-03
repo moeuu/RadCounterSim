@@ -1,4 +1,4 @@
-"""Compact host controls for a RadCounterSim episode."""
+"""Compact host controls for a RadInterAct run."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ class RadCounterWindow:
     def __init__(self, callbacks: WindowCallbacks) -> None:
         ui = _ui_module()
         self._callbacks = callbacks
-        self._window = ui.Window("RadCounterSim", width=520, height=250)
+        self._window = ui.Window("RadInterAct", width=520, height=250)
         self._stage_path_model = ui.SimpleStringModel("")
         self._status_model = ui.SimpleStringModel("State: empty")
         with self._window.frame, ui.VStack(spacing=8, height=0):

@@ -6,8 +6,8 @@ cd "$ROOT"
 
 scripts/build_native.sh
 export LD_LIBRARY_PATH="/home/moeu/.local/embree/4.3.0/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-export PYTHONPATH="$ROOT/build/native/python${PYTHONPATH:+:$PYTHONPATH}"
-uv run pytest tests/unit tests/integration tests/regression
+export PYTHONPATH="$ROOT:$ROOT/build/native/python${PYTHONPATH:+:$PYTHONPATH}"
+uv run python -m pytest tests/unit tests/integration tests/regression
 uv run ruff check .
 
 (
@@ -16,7 +16,10 @@ uv run ruff check .
   for gate in \
     extension_load_gate.py \
     vertical_slice_gate.py \
+    runtime_geometry_gate.py \
+    rotating_shield_gate.py \
     performance_gate.py \
+    visualization_gate.py \
     physics_actions_gate.py \
     articulation_ik_gate.py \
     real_robot_gate.py \
@@ -33,9 +36,9 @@ uv run ruff check .
 )
 
 (
+  scripts/build_ros2.sh
   source scripts/host_env.sh
   cd ros2_ws
-  colcon build --symlink-install --event-handlers console_cohesion+
   export COLCON_TRACE="${COLCON_TRACE:-}"
   set +u
   source install/setup.bash

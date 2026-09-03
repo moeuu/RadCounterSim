@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 
@@ -17,6 +18,8 @@ class ResourceState:
     remaining_robot_runtime_s: dict[str, float] = field(default_factory=dict)
     remaining_shield_units: dict[str, int] = field(default_factory=dict)
     remaining_decon_media: float = float("inf")
+    remaining_clean_water_l: float = float("inf")
+    remaining_wastewater_capacity_l: float = float("inf")
     remaining_countermeasure_count: int = 2**31 - 1
 
     def __post_init__(self) -> None:
@@ -24,11 +27,13 @@ class ResourceState:
             self.remaining_measurement_time_s,
             self.remaining_work_time_s,
             self.remaining_decon_media,
+            self.remaining_clean_water_l,
+            self.remaining_wastewater_capacity_l,
             float(self.remaining_countermeasure_count),
         )
-        if any(value < 0 for value in scalar_values):
+        if any(math.isnan(value) or value < 0 for value in scalar_values):
             raise ValueError("remaining mission resources must be nonnegative")
-        if any(value < 0 for value in self.remaining_robot_runtime_s.values()):
+        if any(math.isnan(value) or value < 0 for value in self.remaining_robot_runtime_s.values()):
             raise ValueError("remaining robot runtime must be nonnegative")
         if any(value < 0 for value in self.remaining_shield_units.values()):
             raise ValueError("remaining shield units must be nonnegative")
@@ -58,12 +63,14 @@ class ResourceState:
         """Return an independent resource state."""
 
         return ResourceState(
-            dict(self.available),
-            dict(self.consumed),
-            self.remaining_measurement_time_s,
-            self.remaining_work_time_s,
-            dict(self.remaining_robot_runtime_s),
-            dict(self.remaining_shield_units),
-            self.remaining_decon_media,
-            self.remaining_countermeasure_count,
+            available=dict(self.available),
+            consumed=dict(self.consumed),
+            remaining_measurement_time_s=self.remaining_measurement_time_s,
+            remaining_work_time_s=self.remaining_work_time_s,
+            remaining_robot_runtime_s=dict(self.remaining_robot_runtime_s),
+            remaining_shield_units=dict(self.remaining_shield_units),
+            remaining_decon_media=self.remaining_decon_media,
+            remaining_clean_water_l=self.remaining_clean_water_l,
+            remaining_wastewater_capacity_l=self.remaining_wastewater_capacity_l,
+            remaining_countermeasure_count=self.remaining_countermeasure_count,
         )

@@ -5,11 +5,11 @@ build-backend = "hatchling.build"
 [project]
 name = "radcountersim"
 version = "0.1.0"
-description = "Closed-loop radiation measurement and countermeasure simulation core for Isaac Sim"
+description = "Scene-consistent radiological measurement and robotic intervention simulation"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = { file = "LICENSE" }
-authors = [{ name = "RadCounterSim contributors" }]
+authors = [{ name = "RadInterAct contributors" }]
 dependencies = [
   "numpy>=2.1,<3",
   "pandas>=2.2,<3",

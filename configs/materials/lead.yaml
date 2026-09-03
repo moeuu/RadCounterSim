@@ -1,6 +1,17 @@
+schema_version: 1
 material_id: lead
-data_status: requires_validated_xcom_export
-provenance: NIST XCOM values must be exported and versioned before research use
-energies_keV: [100.0, 500.0, 1000.0]
-linear_attenuation_m_inv: [0.0, 0.0, 0.0]
+data_status: authoritative_reference
+provenance:
+  source_name: NIST X-Ray Mass Attenuation Coefficients, Lead Z=82
+  source_url: https://physics.nist.gov/PhysRefData/XrayMassCoef/ElemTab/z82.html
+  database_version: XAAMDI online table
+  retrieved_on: 2026-08-29
+  density_g_cm3: 11.350
+  composition_reference: elemental lead, NIST Table 1
+  conversion: linear_attenuation_m_inv = mass_attenuation_cm2_g * density_g_cm3 * 100
+  valid_energy_range_keV: [100.0, 1500.0]
+  payload_sha256: 0552cb782cb726f3994a69743ec05d63f77ebe5aed14bc8bc10a2322f9fd0bb7
+energies_keV: [100.0, 150.0, 200.0, 300.0, 400.0, 500.0, 600.0, 800.0, 1000.0, 1250.0, 1500.0]
+mass_attenuation_cm2_g: [5.549, 2.014, 0.9985, 0.4031, 0.2323, 0.1614, 0.1248, 0.0887, 0.07102, 0.05876, 0.05222]
+linear_attenuation_m_inv: [6298.115, 2285.89, 1133.2975, 457.5185, 263.6605, 183.189, 141.648, 100.6745, 80.6077, 66.6926, 59.2697]
 geometry_mode: solid

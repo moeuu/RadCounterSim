@@ -56,6 +56,7 @@ class SurfaceActivityMap:
     activity_bq: FloatArray
     cumulative_treatment_exposure: FloatArray
     last_treated_step: IntArray
+    verified_contact_dwell_s: FloatArray
     source_path: Path | None = None
     sha256: str | None = None
 
@@ -64,7 +65,8 @@ class SurfaceActivityMap:
         activity_bq = np.asarray(self.activity_bq, dtype=np.float64)
         exposure = np.asarray(self.cumulative_treatment_exposure, dtype=np.float64)
         last_step = np.asarray(self.last_treated_step, dtype=np.int64)
-        arrays = (triangle_indices, activity_bq, exposure, last_step)
+        verified_dwell = np.asarray(self.verified_contact_dwell_s, dtype=np.float64)
+        arrays = (triangle_indices, activity_bq, exposure, last_step, verified_dwell)
         if any(array.ndim != 1 for array in arrays):
             raise ActivityMapIntegrityError("activity-map arrays must be one-dimensional")
         if any(array.shape != triangle_indices.shape for array in arrays[1:]):
@@ -76,8 +78,10 @@ class SurfaceActivityMap:
         if (
             np.any(activity_bq < 0.0)
             or np.any(exposure < 0.0)
+            or np.any(verified_dwell < 0.0)
             or not np.all(np.isfinite(activity_bq))
             or not np.all(np.isfinite(exposure))
+            or not np.all(np.isfinite(verified_dwell))
         ):
             raise ActivityMapIntegrityError("activity and exposure must be finite and nonnegative")
         if np.any(last_step < -1):
@@ -86,6 +90,7 @@ class SurfaceActivityMap:
         self.activity_bq = activity_bq
         self.cumulative_treatment_exposure = exposure
         self.last_treated_step = last_step
+        self.verified_contact_dwell_s = verified_dwell
         if self.sha256 is not None:
             normalized = self.sha256.lower()
             if len(normalized) != 64 or any(
@@ -134,11 +139,17 @@ class SurfaceActivityMap:
                 if "last_treated_step" in archive.files
                 else np.full(triangle_indices.shape, -1, dtype=np.int64)
             )
+            verified_dwell = (
+                np.asarray(archive["verified_contact_dwell_s"], dtype=np.float64)
+                if "verified_contact_dwell_s" in archive.files
+                else np.zeros_like(activity_bq)
+            )
         return cls(
             triangle_indices,
             activity_bq,
             exposure,
             last_step,
+            verified_dwell,
             source_path=path,
             sha256=actual_sha256,
         )
@@ -166,6 +177,7 @@ class SurfaceActivityMap:
                     activity_bq=self.activity_bq,
                     cumulative_treatment_exposure=self.cumulative_treatment_exposure,
                     last_treated_step=self.last_treated_step,
+                    verified_contact_dwell_s=self.verified_contact_dwell_s,
                 )
                 stream.flush()
                 os.fsync(stream.fileno())
@@ -214,10 +226,78 @@ class SurfaceActivityMap:
             )
         except KeyError as error:
             raise KeyError(f"triangle {error.args[0]} is absent from the activity map") from error
-        nominal_fraction = 1.0 - np.exp(-rate_constant_s_inv * increment)
-        actual_fraction = np.clip(nominal_fraction * efficiency_array, 0.0, 1.0)
+        actual_fraction = 1.0 - np.exp(
+            -rate_constant_s_inv * increment * efficiency_array
+        )
         removed = self.activity_bq[slots] * actual_fraction
         self.activity_bq[slots] -= removed
         self.cumulative_treatment_exposure[slots] += increment
         self.last_treated_step[slots] = simulation_step
         return removed
+
+
+@dataclass(frozen=True)
+class VolumeActivityMap:
+    """Integrity-checked voxel centers and activities in source-local coordinates."""
+
+    voxel_centers_local_m: FloatArray
+    activity_bq_per_voxel: FloatArray
+    source_path: Path
+    sha256: str
+
+    def __post_init__(self) -> None:
+        centers = np.asarray(self.voxel_centers_local_m, dtype=np.float64)
+        activity = np.asarray(self.activity_bq_per_voxel, dtype=np.float64)
+        if centers.ndim != 2 or centers.shape[1:] != (3,) or len(centers) == 0:
+            raise ActivityMapIntegrityError("voxel centers must have nonempty shape (N, 3)")
+        if activity.shape != (len(centers),):
+            raise ActivityMapIntegrityError("voxel activity must have shape (N,)")
+        if (
+            not np.all(np.isfinite(centers))
+            or not np.all(np.isfinite(activity))
+            or np.any(activity < 0.0)
+        ):
+            raise ActivityMapIntegrityError("voxel centers/activity must be finite and nonnegative")
+        if len(np.unique(centers, axis=0)) != len(centers):
+            raise ActivityMapIntegrityError("voxel centers must be unique")
+        normalized_digest = self.sha256.lower()
+        if len(normalized_digest) != 64 or any(
+            character not in "0123456789abcdef" for character in normalized_digest
+        ):
+            raise ActivityMapIntegrityError("sha256 must contain 64 hexadecimal characters")
+        object.__setattr__(self, "voxel_centers_local_m", centers)
+        object.__setattr__(self, "activity_bq_per_voxel", activity)
+        object.__setattr__(self, "source_path", self.source_path.resolve())
+        object.__setattr__(self, "sha256", normalized_digest)
+
+    @classmethod
+    def load(
+        cls,
+        uri: str,
+        *,
+        base_directory: str | Path,
+        expected_sha256: str,
+    ) -> VolumeActivityMap:
+        """Load a voxel map whose digest is mandatory for scene consistency."""
+
+        if not expected_sha256:
+            raise ActivityMapIntegrityError("volume activity-map SHA256 is required")
+        path = resolve_asset_uri(uri, base_directory)
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        actual_sha256 = sha256_file(path)
+        if not hmac.compare_digest(actual_sha256, expected_sha256.lower()):
+            raise ActivityMapIntegrityError(
+                "volume activity-map SHA256 mismatch for "
+                f"{path}: expected {expected_sha256}, got {actual_sha256}"
+            )
+        with np.load(path, allow_pickle=False) as archive:
+            required = {"voxel_centers_local_m", "activity_bq_per_voxel"}
+            missing = required.difference(archive.files)
+            if missing:
+                raise ActivityMapIntegrityError(
+                    f"volume activity map is missing arrays: {', '.join(sorted(missing))}"
+                )
+            centers = np.asarray(archive["voxel_centers_local_m"], dtype=np.float64)
+            activity = np.asarray(archive["activity_bq_per_voxel"], dtype=np.float64)
+        return cls(centers, activity, path, actual_sha256)

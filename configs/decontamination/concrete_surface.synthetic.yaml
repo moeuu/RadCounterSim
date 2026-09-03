@@ -1,0 +1,21 @@
+schema_version: 1
+model_id: concrete-surface-validation-v1
+substrate_material_id: concrete
+status: synthetic_validation_only
+dry_contact:
+  rate_constant_s_inv: 0.9
+  efficiency_mean: 0.86
+  efficiency_std: 0.08
+water_jet:
+  removal_coefficient_m2_per_l: 0.80
+  washability_mean: 1.0
+  washability_std: 0.08
+  activity_capture_fraction: 0.70
+  runoff_redeposition_fraction: 0.35
+provenance:
+  source: deterministic software-validation fixture; not measurement data
+  calibration_method: synthetic parameter exercise
+  measured_date: '2026-08-29'
+  units:
+    rate_constant: s^-1
+    removal_coefficient: m^2/L

@@ -83,8 +83,8 @@ def headless_main(argv: list[str] | None = None) -> int:
     detector = DetectorSpec(
         detector_cfg.detector_id,
         np.asarray(detector_cfg.energy_bin_edges_keV),
-        np.asarray(detector_cfg.efficiency_energy_keV),
-        np.asarray(detector_cfg.intrinsic_efficiency),
+        np.asarray(detector_cfg.response_energy_keV),
+        np.asarray(detector_cfg.effective_area_m2_per_bin),
         np.asarray(detector_cfg.background_cps_per_bin),
         detector_cfg.dead_time_s,
     )

@@ -1,10 +1,9 @@
-# RadCounterSim
+# RadInterAct
 
-RadCounterSim is a closed-loop radiation measurement and countermeasure
-simulation platform. It separates simulator-only truth from the state available
-to estimators and planners, then executes the cycle
-
-`MEASURE -> ESTIMATE -> PLAN -> PREDICT -> EXECUTE -> VERIFY -> DIAGNOSE -> UPDATE`.
+RadInterAct is a scene-consistent platform for evaluating radiological
+measurement and robot-executed countermeasures. Rendering, physical interaction,
+radiation paths, source state, and detector observations share one mutable USD
+scene while simulator-only state remains inaccessible to estimators and planners.
 
 The repository has three layers:
 
@@ -24,7 +23,7 @@ uv run radcounter-validate configs/scenarios/analytic_free_space.yaml
 uv run radcounter-headless configs/scenarios/analytic_free_space.yaml
 uv run radcounter-import-environment configs/environments/vertical_slice_import.yaml
 uv run radcounter-experiments --case analytic_radiation_validation --seed 42
-uv run pytest
+uv run python -m pytest
 ```
 
 Do not install project dependencies with `pip` into the system interpreter.
@@ -85,8 +84,9 @@ Carter assets. It drives real articulation and wheel joints, solves the
 seven-axis arm with Lula IK, closes the physical gripper before attaching a
 payload constraint, and performs contact-driven decontamination. Shield
 placement/correction, contaminated-drum relocation/disposal, and obstacle
-relocation all use the same base-arm-gripper sequence; operation-time USD pose
-teleports are prohibited.
+relocation all use the same base-arm-gripper sequence. Direct USD pose edits are
+available for separately labeled `kinematic_scene_edit` experiments, but are
+never accepted as `physical_robot_execution` evidence.
 
 ```bash
 export OMNI_KIT_ACCEPT_EULA=YES RADCOUNTER_HOST_ENV_NO_ROS=1
@@ -162,3 +162,11 @@ Pressure-water washing models nozzle flow, pressure, cone geometry, standoff, in
 ## Detector arrays
 
 Synchronized arrays can mix omnidirectional survey meters, spectrometers, dose meters, neutron counters, directional collimators, coded-aperture imagers, Compton cameras, and custom detector plugins. CSV/YAML response descriptors and external reading buffers make laboratory and hardware detectors connect through the same schema. See `docs/detector-integration.md`.
+
+The rotating-shield detector has two explicit modes. The physical mode in
+`configs/detectors/rotating_shield_counter.physical.synthetic.yaml` rotates
+material-tagged USD shielding, synchronizes Embree, and evaluates the common
+detector-response path at every actual posture. The response-mask configuration
+is retained only as a separately identified approximation. The physical-mode
+component gate is `tests/isaac/rotating_shield_gate.py` and reports
+`kinematic_scene_edit` evidence, never robot-execution evidence.

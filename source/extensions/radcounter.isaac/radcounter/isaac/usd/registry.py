@@ -59,7 +59,7 @@ class UsdMetadataAuthor:
     """Author canonical custom attributes without requiring a custom USD schema."""
 
     def __init__(self) -> None:
-        self._sdf, _, _, _ = _pxr_modules()
+        self._sdf, _, _, self._usd_geom = _pxr_modules()
 
     def _set(self, prim: Any, name: str, type_name: Any, value: Any) -> None:
         attribute = prim.GetAttribute(name)
@@ -144,6 +144,13 @@ class UsdMetadataAuthor:
         self._set(
             prim, UsdRadiationAttributes.MATERIAL_ID, value_types.String, shield.material_id
         )
+        if not prim.IsA(self._usd_geom.Gprim):
+            self._set(
+                prim,
+                UsdRadiationAttributes.MATERIAL_CONTAINER_ONLY,
+                value_types.Bool,
+                True,
+            )
         self._set(
             prim, UsdRadiationAttributes.SHIELD_MOVABLE, value_types.Bool, shield.movable
         )
@@ -169,15 +176,21 @@ class UsdMetadataAuthor:
         )
         self._set(
             prim,
-            UsdRadiationAttributes.DECON_EFFICIENCY_MEAN,
-            value_types.Double,
-            surface.efficiency_mean,
+            UsdRadiationAttributes.DECON_SUBSTRATE_MATERIAL_ID,
+            value_types.String,
+            surface.substrate_material_id,
         )
         self._set(
             prim,
-            UsdRadiationAttributes.DECON_EFFICIENCY_STD,
-            value_types.Double,
-            surface.efficiency_std,
+            UsdRadiationAttributes.DECON_TREATMENT_MODEL_URI,
+            value_types.Asset,
+            self._sdf.AssetPath(surface.treatment_model_uri),
+        )
+        self._set(
+            prim,
+            UsdRadiationAttributes.DECON_TREATMENT_MODEL_SHA256,
+            value_types.String,
+            surface.treatment_model_sha256,
         )
         self._set(
             prim,
@@ -396,14 +409,19 @@ class UsdRadiationRegistry:
                     bool(True if decon_enabled_value is None else decon_enabled_value),
                     map_uri,
                     map_sha,
-                    float(
+                    str(
                         _attribute_value(
-                            prim, UsdRadiationAttributes.DECON_EFFICIENCY_MEAN, 1.0
+                            prim, UsdRadiationAttributes.DECON_SUBSTRATE_MATERIAL_ID, ""
                         )
                     ),
-                    float(
+                    str(
                         _attribute_value(
-                            prim, UsdRadiationAttributes.DECON_EFFICIENCY_STD, 0.0
+                            prim, UsdRadiationAttributes.DECON_TREATMENT_MODEL_URI, ""
+                        )
+                    ),
+                    str(
+                        _attribute_value(
+                            prim, UsdRadiationAttributes.DECON_TREATMENT_MODEL_SHA256, ""
                         )
                     ),
                     float(

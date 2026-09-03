@@ -131,6 +131,9 @@ def _generator(stage: _Stage, simulation: _Simulation) -> IsaacActionCandidateGe
     generator._center = lambda prim: np.asarray(  # type: ignore[method-assign]
         (0.0, 0.0, 0.5), dtype=np.float64
     )
+    generator._grasp_from_root = lambda prim, frame: np.asarray(  # type: ignore[method-assign]
+        (-0.24, 0.0, 0.59), dtype=np.float64
+    )
     generator._base_for_end_effector = (  # type: ignore[method-assign]
         lambda target, **kwargs: np.asarray(target, dtype=np.float64)
     )
@@ -159,6 +162,7 @@ def test_successful_shield_deployment_transitions_stable_candidates_to_move() ->
         generator,
         lambda measurement, previous: previous,
         resources=resources,
+        simulation_time_s=lambda: 0.0,
     )
     services._physical_execute = (  # type: ignore[method-assign]
         lambda action: _ExecutionReport(True, "physical placement completed", {})
@@ -214,6 +218,7 @@ def test_failed_shield_placement_does_not_commit_metadata_or_inventory() -> None
         generator,
         lambda measurement, previous: previous,
         resources=resources,
+        simulation_time_s=lambda: 0.0,
     )
     services._physical_execute = (  # type: ignore[method-assign]
         lambda action: _ExecutionReport(False, "physical placement failed", {})

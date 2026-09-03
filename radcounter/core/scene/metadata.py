@@ -41,6 +41,11 @@ class UsdRadiationAttributes:
     SOURCE_SURFACE_ACTIVITY_BQ_M2 = "rad:source:surfaceActivityBqM2"
     SOURCE_ACTIVITY_MAP_URI = "rad:source:activityMapUri"
     SOURCE_ACTIVITY_MAP_SHA256 = "rad:source:activityMapSha256"
+    SOURCE_SAMPLING_MODE = "rad:source:samplingMode"
+    SOURCE_SAMPLES_PER_TRIANGLE = "rad:source:samplesPerTriangle"
+    SOURCE_MAX_SAMPLES_PER_TRIANGLE = "rad:source:maxSamplesPerTriangle"
+    SOURCE_VOLUME_DISTRIBUTION = "rad:source:volumeDistribution"
+    SOURCE_SAMPLE_COUNT = "rad:source:sampleCount"
     SOURCE_HIDDEN_FROM_ESTIMATOR = "rad:source:hiddenFromEstimator"
     SOURCE_MOVABLE_WITH_PRIM = "rad:source:movableWithPrim"
     SOURCE_ENABLED = "rad:source:enabled"
@@ -48,13 +53,15 @@ class UsdRadiationAttributes:
     MATERIAL_MODE = "rad:material:mode"
     MATERIAL_THICKNESS_M = "rad:material:thicknessM"
     MATERIAL_ATTENUATION_URI = "rad:material:attenuationUri"
+    MATERIAL_CONTAINER_ONLY = "rad:material:containerOnly"
     SHIELD_MOVABLE = "rad:shield:movable"
     SHIELD_RESOURCE_UNITS = "rad:shield:resourceUnits"
     DECON_ENABLED = "rad:decon:enabled"
     DECON_ACTIVITY_MAP_URI = "rad:decon:activityMapUri"
     DECON_ACTIVITY_MAP_SHA256 = "rad:decon:activityMapSha256"
-    DECON_EFFICIENCY_MEAN = "rad:decon:efficiencyMean"
-    DECON_EFFICIENCY_STD = "rad:decon:efficiencyStd"
+    DECON_SUBSTRATE_MATERIAL_ID = "rad:decon:substrateMaterialId"
+    DECON_TREATMENT_MODEL_URI = "rad:decon:treatmentModelUri"
+    DECON_TREATMENT_MODEL_SHA256 = "rad:decon:treatmentModelSha256"
     DECON_MIN_TOOL_DWELL_S = "rad:decon:minToolDwellS"
     MANIPULATION_MOVABLE = "rad:manipulation:movable"
     MANIPULATION_REMOVABLE = "rad:manipulation:removable"
@@ -146,15 +153,18 @@ class DecontaminationSurfaceDescriptor:
     enabled: bool
     activity_map_uri: str | None
     activity_map_sha256: str | None
-    efficiency_mean: float
-    efficiency_std: float
+    substrate_material_id: str
+    treatment_model_uri: str
+    treatment_model_sha256: str
     min_tool_dwell_s: float
 
     def __post_init__(self) -> None:
         if not self.prim_path.startswith("/"):
             raise ValueError("decontamination prim path must be absolute")
-        if not 0.0 <= self.efficiency_mean <= 1.0 or self.efficiency_std < 0.0:
-            raise ValueError("decontamination efficiency parameters are invalid")
+        if not self.substrate_material_id or not self.treatment_model_uri:
+            raise ValueError("decontamination substrate and treatment model are required")
+        if len(self.treatment_model_sha256) != 64:
+            raise ValueError("decontamination treatment model requires a SHA256 digest")
         if self.min_tool_dwell_s < 0.0:
             raise ValueError("minimum tool dwell must be nonnegative")
 

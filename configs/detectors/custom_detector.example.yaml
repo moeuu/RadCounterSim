@@ -1,11 +1,10 @@
-schema_version: "1.0"
+schema_version: "2.0"
 detector:
   model_id: laboratory_custom_czt
   display_name: Laboratory custom CZT detector
   family: semiconductor
   directionality: collimated
   outputs: [counts, count_rate, spectrum, direction]
-  active_area_m2: 0.0004
   background_cps: 0.2
   dead_time_s: 0.000001
   dead_time_model: nonparalyzable
@@ -18,7 +17,12 @@ detector:
     - radiation_type: gamma
       response_csv: custom_detector_response.csv
       energy_column: energy_kev
-      efficiency_column: efficiency
+      effective_area_column: effective_area_m2
+  response_data_status: synthetic_validation_only
+  response_provenance:
+    source: deterministic software-validation fixture
+    calibration_method: synthetic relative response scaled by nominal area
+    measured_date: '2026-08-29'
   metadata:
     manufacturer: laboratory
     interface: custom

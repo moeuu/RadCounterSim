@@ -15,9 +15,21 @@ def test_detector_requires_background_per_bin() -> None:
             "d",
             np.array([0.0, 100.0, 200.0]),
             np.array([1.0, 200.0]),
-            np.array([0.1, 0.1]),
+            np.ones((2, 2)),
             np.array([0.0]),
         )
+
+
+def test_detector_rejects_response_energy_extrapolation() -> None:
+    detector = DetectorSpec(
+        "d",
+        np.array([0.0, 200.0]),
+        np.array([10.0, 100.0]),
+        np.ones((2, 1)),
+        np.array([0.0]),
+    )
+    with pytest.raises(ValueError, match="outside detector response range"):
+        detector.effective_area_m2_at(101.0)
 
 
 def test_isotope_requires_emission_lines() -> None:

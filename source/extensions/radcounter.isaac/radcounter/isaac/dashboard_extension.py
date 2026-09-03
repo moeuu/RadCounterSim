@@ -1,4 +1,4 @@
-"""Dedicated Kit extension entry point for the RadCounterSim dashboard."""
+"""Dedicated Kit extension entry point for the RadInterAct dashboard."""
 
 from __future__ import annotations
 

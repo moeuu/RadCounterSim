@@ -5,6 +5,13 @@ from .decontamination import (
     DecontaminationConfig,
     TreatmentTickResult,
 )
+from .disposal import (
+    DisposalConfiguration,
+    DisposalDisposition,
+    DisposalStateChange,
+    apply_disposal_state,
+    disposal_configuration,
+)
 from .generic import (
     GenericArticulationController,
     GenericRobotImporter,
@@ -36,12 +43,23 @@ from .real_robots import (
 )
 from .reference_models import SpawnedReferenceRobot, spawn_reference_robot
 from .sensor_rig import IsaacRobotSensorRigManager, MountedIsaacSensor
+from .water_decontamination import (
+    MeshWaterDecontaminationConfig,
+    MeshWaterDecontaminator,
+    MeshWaterTreatmentResult,
+)
 
 __all__ = [
     "ArticulatedTaskReport",
     "ContactDrivenDecontaminator",
     "DecontaminationConfig",
+    "MeshWaterDecontaminationConfig",
+    "MeshWaterDecontaminator",
+    "MeshWaterTreatmentResult",
     "DecontaminationMotionReport",
+    "DisposalConfiguration",
+    "DisposalDisposition",
+    "DisposalStateChange",
     "GenericArticulationController",
     "GenericRobotImporter",
     "HandMotionResult",
@@ -62,8 +80,10 @@ __all__ = [
     "SpawnedReferenceRobot",
     "TreatmentTickResult",
     "add_real_robot_references",
+    "apply_disposal_state",
     "author_real_robot_task_scene",
     "create_decontamination_activity_map",
     "enable_real_robot_extensions",
+    "disposal_configuration",
     "spawn_reference_robot",
 ]

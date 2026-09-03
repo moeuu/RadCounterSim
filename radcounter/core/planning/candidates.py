@@ -85,4 +85,23 @@ class DeterministicFeasibilityChecker:
             requested_media = float(action.parameters.get("decon_media", 0.0))
             if requested_media > resources.remaining_decon_media:
                 reasons.append("decon_media_exhausted")
+            method = str(action.parameters.get("treatment_method", "dry_contact"))
+            if method == "water_jet":
+                if (
+                    "clean_water_l" not in action.parameters
+                    or "wastewater_l" not in action.parameters
+                ):
+                    reasons.append("water_resource_requirements_missing")
+                else:
+                    clean_water_l = float(action.parameters["clean_water_l"])
+                    wastewater_l = float(action.parameters["wastewater_l"])
+                    if clean_water_l < 0.0 or wastewater_l < 0.0:
+                        reasons.append("invalid_water_resource_requirement")
+                    else:
+                        if clean_water_l > resources.remaining_clean_water_l:
+                            reasons.append("clean_water_exhausted")
+                        if wastewater_l > resources.remaining_wastewater_capacity_l:
+                            reasons.append("wastewater_capacity_exhausted")
+            elif method != "dry_contact":
+                reasons.append("unsupported_treatment_method")
         return FeasibilityReport(not reasons, tuple(reasons))

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import math
-import os
-import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +12,11 @@ from typing import Any, Literal
 import numpy as np
 from numpy.typing import NDArray
 
+from radcounter.core.scene.activity_map import SurfaceActivityMap, resolve_asset_uri
 from radcounter.core.surface_decontamination import effective_contact_exposure_s
+from radcounter.core.treatment import TreatmentMaterialModel, load_treatment_material_model
+
+from .disposal import DisposalDisposition, disposal_configuration
 
 FloatArray = NDArray[np.float64]
 IntArray = NDArray[np.int64]
@@ -37,9 +39,6 @@ class DecontaminationConfig:
     max_contact_distance_m: float = 0.035
     max_normal_angle_deg: float = 25.0
     max_surface_speed_m_s: float = 0.3
-    rate_constant_s_inv: float = 0.9
-    efficiency_mean: float = 0.86
-    efficiency_std: float = 0.08
     transfer_mode: Literal["discard", "transfer_to_waste"] = "transfer_to_waste"
     waste_source_path: str = "/World/DecontaminationWaste"
     random_seed: int = 19
@@ -54,10 +53,19 @@ class TreatmentTickResult:
     removed_activity_bq: float
     cumulative_removed_activity_bq: float
     recontaminated_activity_bq: float = 0.0
+    dwell_qualified_triangle_indices: tuple[int, ...] = ()
+    dwell_pending_triangle_indices: tuple[int, ...] = ()
+    minimum_tool_dwell_s: float = 0.0
+    treatment_model_id: str = ""
+    treatment_data_status: str = ""
+    treatment_numeric_sha256: str = ""
+    activity_balance_error_bq: float = 0.0
 
 
 class ContactDrivenDecontaminator:
     """Modify truth activity only when the physical tool satisfies contact constraints."""
+
+    treatment_method = "dry_contact"
 
     def __init__(
         self,
@@ -76,6 +84,7 @@ class ContactDrivenDecontaminator:
         self._rng = np.random.default_rng(self.config.random_seed)
         self._previous_center: FloatArray | None = None
         self._cumulative_removed = 0.0
+        self._cumulative_recontaminated = 0.0
         self._dirty = False
         surface = stage.GetPrimAtPath(surface_path)
         if (
@@ -84,6 +93,18 @@ class ContactDrivenDecontaminator:
             or not bool(self._attribute(surface, "rad:decon:enabled", False))
         ):
             raise ValueError(f"{surface_path} is not an enabled decontamination surface")
+        if (
+            not self.config.footprint_points_local_m
+            or self.config.max_contact_distance_m <= 0.0
+            or self.config.max_surface_speed_m_s <= 0.0
+        ):
+            raise ValueError("decontamination configuration contains invalid physical values")
+        minimum_dwell = self._attribute(surface, "rad:decon:minToolDwellS", None)
+        if minimum_dwell is None:
+            raise ValueError(f"{surface_path} requires authored rad:decon:minToolDwellS")
+        self.minimum_tool_dwell_s = float(minimum_dwell)
+        if not math.isfinite(self.minimum_tool_dwell_s) or self.minimum_tool_dwell_s < 0.0:
+            raise ValueError("rad:decon:minToolDwellS must be finite and nonnegative")
         uri = str(
             self._attribute(
                 surface,
@@ -91,22 +112,69 @@ class ContactDrivenDecontaminator:
                 self._attribute(surface, "rad:source:activityMapUri", ""),
             )
         )
-        root_layer = Path(stage.GetRootLayer().realPath).resolve()
-        self.activity_path = (
-            Path(uri) if Path(uri).is_absolute() else (root_layer.parent / uri).resolve()
+        root_layer_path = str(stage.GetRootLayer().realPath or "")
+        base_directory = Path(root_layer_path).resolve().parent if root_layer_path else Path.cwd()
+        substrate_material_id = str(self._attribute(surface, "rad:decon:substrateMaterialId", ""))
+        treatment_uri_value = self._attribute(surface, "rad:decon:treatmentModelUri", "")
+        treatment_uri = str(getattr(treatment_uri_value, "path", treatment_uri_value))
+        treatment_digest = str(self._attribute(surface, "rad:decon:treatmentModelSha256", ""))
+        if not substrate_material_id or not treatment_uri or not treatment_digest:
+            raise ValueError(
+                f"{surface_path} requires substrateMaterialId, treatmentModelUri, and "
+                "treatmentModelSha256"
+            )
+        treatment_path = resolve_asset_uri(treatment_uri, base_directory)
+        self.treatment_model: TreatmentMaterialModel = load_treatment_material_model(
+            treatment_path,
+            expected_file_sha256=treatment_digest,
+            expected_substrate_material_id=substrate_material_id,
         )
+        self.activity_path = resolve_asset_uri(uri, base_directory)
         expected_digest = str(self._attribute(surface, "rad:decon:activityMapSha256", ""))
-        actual_digest = hashlib.sha256(self.activity_path.read_bytes()).hexdigest()
-        if expected_digest and expected_digest != actual_digest:
-            raise ValueError(f"activity-map digest mismatch for {self.activity_path}")
+        if not expected_digest:
+            raise ValueError(f"{surface_path} requires rad:decon:activityMapSha256")
         with np.load(self.activity_path, allow_pickle=False) as payload:
-            self.triangle_indices = np.asarray(payload["triangle_indices"], dtype=np.int64)
-            self.activity_bq = np.asarray(payload["activity_bq"], dtype=np.float64)
-            self.exposure = np.asarray(payload["cumulative_treatment_exposure"], dtype=np.float64)
-            self.last_treated_step = np.asarray(payload["last_treated_step"], dtype=np.int64)
+            required = {
+                "triangle_indices",
+                "activity_bq",
+                "cumulative_treatment_exposure",
+                "last_treated_step",
+                "verified_contact_dwell_s",
+            }
+            missing = required.difference(payload.files)
+            if missing:
+                raise ValueError(
+                    "decontamination activity map is missing arrays: " + ", ".join(sorted(missing))
+                )
+        self._activity_map = SurfaceActivityMap.load(
+            uri,
+            base_directory=base_directory,
+            expected_sha256=expected_digest,
+        )
+        self.triangle_indices = self._activity_map.triangle_indices
+        self.activity_bq = self._activity_map.activity_bq
+        self.exposure = self._activity_map.cumulative_treatment_exposure
+        self.last_treated_step = self._activity_map.last_treated_step
+        self.verified_contact_dwell_s = self._activity_map.verified_contact_dwell_s
         self.initial_activity_bq = self.activity_bq.copy()
+        self._initial_total_activity_bq = float(np.sum(self.initial_activity_bq))
         from pxr import UsdGeom
 
+        mesh = UsdGeom.Mesh(surface)
+        if not mesh:
+            raise ValueError("contact decontamination requires the visible source to be a Mesh")
+        face_vertex_counts = np.asarray(mesh.GetFaceVertexCountsAttr().Get(), dtype=np.int64)
+        if len(face_vertex_counts) == 0 or np.any(face_vertex_counts != 3):
+            raise ValueError(
+                "contact decontamination requires triangulated visible source geometry"
+            )
+        if not np.array_equal(
+            self.triangle_indices,
+            np.arange(len(face_vertex_counts), dtype=np.int64),
+        ):
+            raise ValueError(
+                "activity map must cover every and only every face of the visible source mesh"
+            )
         authored_colors = UsdGeom.Gprim(surface).GetDisplayColorAttr().Get() or ()
         initial_colors = np.asarray(authored_colors, dtype=np.float64)
         self._initial_display_colors = (
@@ -117,11 +185,19 @@ class ContactDrivenDecontaminator:
         correlation = 0.75
         variation = correlation * common + math.sqrt(1.0 - correlation**2) * local
         self.truth_efficiency = np.clip(
-            self.config.efficiency_mean + self.config.efficiency_std * variation,
+            self.treatment_model.dry_contact.efficiency_mean
+            + self.treatment_model.dry_contact.efficiency_std * variation,
             0.05,
             1.0,
         )
         self._row_by_triangle = {int(index): row for row, index in enumerate(self.triangle_indices)}
+        self._waste_disposal = None
+        if self.config.transfer_mode == "transfer_to_waste":
+            self._waste_disposal = disposal_configuration(stage, "/World/DisposalZone")
+            if self._waste_disposal.disposition is not DisposalDisposition.SHIELDED_STORAGE:
+                raise ValueError(
+                    "decontamination waste transfer requires in-scene shielded storage"
+                )
 
     @staticmethod
     def _attribute(prim: Any, name: str, default: object = None) -> object:
@@ -168,9 +244,7 @@ class ContactDrivenDecontaminator:
         )
         fraction = np.clip(fraction, 0.0, 1.0)
         host_color = np.asarray((0.20, 0.27, 0.32), dtype=np.float64)
-        colors = host_color + fraction[:, None] * (
-            self._initial_display_colors - host_color
-        )
+        colors = host_color + fraction[:, None] * (self._initial_display_colors - host_color)
         color_attr = gprim.GetDisplayColorAttr()
         color_attr.Set([Gf.Vec3f(*color) for color in colors])
         color_attr.SetMetadata("interpolation", UsdGeom.Tokens.uniform)
@@ -219,6 +293,8 @@ class ContactDrivenDecontaminator:
             accepted += 1
             hit_counts[triangle_index] = hit_counts.get(triangle_index, 0) + 1
         removed_total = 0.0
+        qualified_triangles: list[int] = []
+        pending_triangles: list[int] = []
         effective_exposure_s = effective_contact_exposure_s(
             dt_s,
             speed,
@@ -226,20 +302,34 @@ class ContactDrivenDecontaminator:
         )
         for triangle_index in hit_counts:
             row = self._row_by_triangle[triangle_index]
+            previous_dwell_s = float(self.verified_contact_dwell_s[row])
+            current_dwell_s = previous_dwell_s + dt_s
+            self.verified_contact_dwell_s[row] = current_dwell_s
+            eligible_contact_s = max(
+                current_dwell_s - self.minimum_tool_dwell_s,
+                0.0,
+            ) - max(previous_dwell_s - self.minimum_tool_dwell_s, 0.0)
             # Ray count is spatial sampling density, not elapsed time.  Apply
             # one contact tick per hit face so densifying the pad footprint
             # cannot dilute treatment, matching SurfaceSourceGrid.apply_tool().
-            incremental_exposure = effective_exposure_s
+            incremental_exposure = effective_exposure_s * eligible_contact_s / dt_s
+            if incremental_exposure <= 0.0:
+                pending_triangles.append(triangle_index)
+                continue
+            qualified_triangles.append(triangle_index)
             removal_fraction = 1.0 - math.exp(
-                -self.config.rate_constant_s_inv * incremental_exposure * self.truth_efficiency[row]
+                -self.treatment_model.dry_contact.rate_constant_s_inv
+                * incremental_exposure
+                * self.truth_efficiency[row]
             )
             removed = float(self.activity_bq[row] * removal_fraction)
             self.activity_bq[row] -= removed
             self.exposure[row] += incremental_exposure
             self.last_treated_step[row] = simulation_step
             removed_total += removed
-        if removed_total > 0:
+        if hit_counts:
             self._dirty = True
+        if removed_total > 0:
             self._cumulative_removed += removed_total
             if self.config.transfer_mode == "transfer_to_waste":
                 self._transfer_to_waste(removed_total)
@@ -249,10 +339,17 @@ class ContactDrivenDecontaminator:
         return TreatmentTickResult(
             accepted_contacts=accepted,
             rejected_contacts=rejected,
-            treated_triangle_indices=tuple(sorted(hit_counts)),
+            treated_triangle_indices=tuple(sorted(qualified_triangles)),
             removed_activity_bq=removed_total,
             cumulative_removed_activity_bq=self._cumulative_removed,
             recontaminated_activity_bq=recontaminated,
+            dwell_qualified_triangle_indices=tuple(sorted(qualified_triangles)),
+            dwell_pending_triangle_indices=tuple(sorted(pending_triangles)),
+            minimum_tool_dwell_s=self.minimum_tool_dwell_s,
+            treatment_model_id=self.treatment_model.model_id,
+            treatment_data_status=self.treatment_model.status,
+            treatment_numeric_sha256=self.treatment_model.numeric_sha256,
+            activity_balance_error_bq=self.activity_balance_error_bq,
         )
 
     def inject_recontamination(
@@ -274,8 +371,20 @@ class ContactDrivenDecontaminator:
         if total_weight <= 0:
             raise ValueError("triangle_weights must contain positive mass")
         self.activity_bq += activity_bq * weights / total_weight
+        self._cumulative_recontaminated += activity_bq
         self._dirty = True
         return float(activity_bq)
+
+    @property
+    def activity_balance_error_bq(self) -> float:
+        """Return source-plus-waste conservation error for this treatment run."""
+
+        return float(
+            self._initial_total_activity_bq
+            + self._cumulative_recontaminated
+            - np.sum(self.activity_bq)
+            - self._cumulative_removed
+        )
 
     def _transfer_to_waste(self, removed_activity_bq: float) -> None:
         from pxr import Gf, Sdf, UsdGeom
@@ -298,10 +407,16 @@ class ContactDrivenDecontaminator:
             waste.CreateAttribute("rad:source:enabled", Sdf.ValueTypeNames.Bool, custom=True).Set(
                 True
             )
-            zone = self.stage.GetPrimAtPath("/World/DisposalZone")
+            zone = self.stage.GetPrimAtPath(self._waste_disposal.zone_path)
             if zone and zone.IsValid():
                 world = UsdGeom.XformCache().GetLocalToWorldTransform(zone).Transform(Gf.Vec3d())
                 UsdGeom.Xformable(waste).AddTranslateOp().Set(Gf.Vec3d(*world))
+            waste.CreateAttribute("rad:source:contained", Sdf.ValueTypeNames.Bool, custom=True).Set(
+                True
+            )
+            waste.CreateAttribute(
+                "rad:source:containmentPrimPath", Sdf.ValueTypeNames.String, custom=True
+            ).Set(str(self._waste_disposal.storage_prim_path))
         activity = waste.GetAttribute("rad:source:activityBq")
         if not activity:
             activity = waste.CreateAttribute(
@@ -313,26 +428,7 @@ class ContactDrivenDecontaminator:
         if not self._dirty:
             return hashlib.sha256(self.activity_path.read_bytes()).hexdigest()
         self._update_surface_visuals()
-        self.activity_path.parent.mkdir(parents=True, exist_ok=True)
-        file_descriptor, temporary_name = tempfile.mkstemp(
-            prefix=f".{self.activity_path.stem}.",
-            suffix=".npz",
-            dir=self.activity_path.parent,
-        )
-        os.close(file_descriptor)
-        temporary = Path(temporary_name)
-        try:
-            np.savez_compressed(
-                temporary,
-                triangle_indices=self.triangle_indices,
-                activity_bq=self.activity_bq,
-                cumulative_treatment_exposure=self.exposure,
-                last_treated_step=self.last_treated_step,
-            )
-            os.replace(temporary, self.activity_path)
-        finally:
-            temporary.unlink(missing_ok=True)
-        digest = hashlib.sha256(self.activity_path.read_bytes()).hexdigest()
+        digest = self._activity_map.save(self.activity_path)
         surface = self.stage.GetPrimAtPath(self.surface_path)
         for name in ("rad:source:activityMapSha256", "rad:decon:activityMapSha256"):
             attribute = surface.GetAttribute(name)

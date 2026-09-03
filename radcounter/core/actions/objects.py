@@ -37,14 +37,14 @@ def _update_attached_point_sources(
     old_pose: np.ndarray,
     new_pose: np.ndarray,
     context: CountermeasureExecutionContext,
-) -> bool:
+) -> list[str]:
     delta = new_pose @ np.linalg.inv(old_pose)
-    moved_source = False
+    moved_source_ids: list[str] = []
     for source in context.truth_state.point_sources.values():
         if source.attached_prim_path == target_prim_path:
             source.position_world_m = transform_point(delta, source.position_world_m)
-            moved_source = True
-    return moved_source
+            moved_source_ids.append(source.source_id)
+    return moved_source_ids
 
 
 class MoveObjectExecutor:
@@ -79,19 +79,25 @@ class MoveObjectExecutor:
         )
         if not success:
             return self._terminal(action, context, before, ActionStatus.FAILED, message)
-        moved_source = _update_attached_point_sources(
+        moved_source_ids = _update_attached_point_sources(
             target, old_pose, action.target_pose_world, context
         )
         context.object_poses_world[target] = action.target_pose_world.copy()
         context.resources.consume(action.resource_cost)
-        context.truth_state.revision.bump_source_pose(geometry_changed=True)
+        if moved_source_ids:
+            context.truth_state.revision.bump_source_pose(geometry_changed=True)
+        else:
+            context.truth_state.revision.bump_geometry()
         context.advance(action.predicted_duration_s)
         return ActionResult(
             action.action_id,
             ActionStatus.COMPLETED,
             started,
             context.sim_time_s,
-            {"target_prim_path": target, "attached_source_pose_updated": moved_source},
+            {
+                "target_prim_path": target,
+                "moved_source_ids": moved_source_ids,
+            },
             {"actual_pose_world": action.target_pose_world.tolist()},
             before,
             context.truth_state.revision.copy(),
@@ -158,18 +164,30 @@ class RemoveObjectExecutor:
         )
         if not success:
             return self._terminal(action, context, before, ActionStatus.FAILED, message)
-        _update_attached_point_sources(target, old_pose, action.target_pose_world, context)
+        moved_source_ids = _update_attached_point_sources(
+            target, old_pose, action.target_pose_world, context
+        )
         context.object_poses_world[target] = action.target_pose_world.copy()
         deactivated_sources: list[str] = []
-        if zone.disposition == "deactivate_outside":
+        active_stored_sources: list[str] = []
+        if zone.disposition == "out_of_evaluation_domain":
             for source in context.truth_state.point_sources.values():
                 if source.attached_prim_path == target and source.enabled:
                     source.enabled = False
                     deactivated_sources.append(source.source_id)
             if deactivated_sources:
                 context.truth_state.revision.bump_source_activity()
+        else:
+            active_stored_sources = [
+                source.source_id
+                for source in context.truth_state.point_sources.values()
+                if source.attached_prim_path == target and source.enabled
+            ]
         context.resources.consume(action.resource_cost)
-        context.truth_state.revision.bump_source_pose(geometry_changed=True)
+        if moved_source_ids:
+            context.truth_state.revision.bump_source_pose(geometry_changed=True)
+        else:
+            context.truth_state.revision.bump_geometry()
         context.advance(action.predicted_duration_s)
         return ActionResult(
             action.action_id,
@@ -180,8 +198,13 @@ class RemoveObjectExecutor:
                 "target_prim_path": target,
                 "disposal_zone_id": zone_id,
                 "disposition": zone.disposition,
+                "storage_prim_path": zone.storage_prim_path,
             },
-            {"deactivated_source_ids": deactivated_sources},
+            {
+                "moved_source_ids": moved_source_ids,
+                "deactivated_source_ids": deactivated_sources,
+                "active_stored_source_ids": active_stored_sources,
+            },
             before,
             context.truth_state.revision.copy(),
         )

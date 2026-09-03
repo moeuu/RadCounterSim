@@ -3,7 +3,7 @@ default_profile: vertical-slice
 
 environments:
   vertical-slice:
-    display_name: RadCounterSim vertical slice
+    display_name: RadInterAct vertical slice
     descriptor_uri: ../environments/vertical_slice_import.yaml
     description: Canonical four-room decommissioning and validation environment.
     spawn_anchors:

@@ -10,7 +10,7 @@ def _measure(seed: int) -> np.ndarray:
         "d",
         np.array([0.0, 100.0]),
         np.array([1.0, 100.0]),
-        np.array([1.0, 1.0]),
+        np.ones((2, 1)),
         np.array([0.0]),
     )
     sensor = OmnidirectionalCounter(detector, SeedManager(seed).generator("detector/d"))

@@ -7,6 +7,7 @@ from radcounter.core.planning.candidates import (
 from radcounter.core.planning.models import (
     ActionCandidate,
     ActionMetrics,
+    ActionOutcomeSamples,
     FeasibilityFacts,
     FeasibilityReport,
     ObjectiveWeights,
@@ -21,12 +22,14 @@ from radcounter.core.planning.planners import (
     NearestSourcePlanner,
     OpenLoopPlanner,
     RandomPlanner,
+    RiskAwareCountermeasurePlanner,
 )
 
 __all__ = [
     "ActionCandidate",
     "ActionCandidateGenerator",
     "ActionMetrics",
+    "ActionOutcomeSamples",
     "ClosedLoopResidualPlanner",
     "DeterministicFeasibilityChecker",
     "FeasibilityFacts",
@@ -41,4 +44,5 @@ __all__ = [
     "PlanningContext",
     "PlanningDecision",
     "RandomPlanner",
+    "RiskAwareCountermeasurePlanner",
 ]

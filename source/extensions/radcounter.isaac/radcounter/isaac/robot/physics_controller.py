@@ -11,6 +11,10 @@ from typing import Any, Protocol
 import numpy as np
 from numpy.typing import NDArray
 
+from radcounter.core.experiments import EvidenceClass
+
+from .disposal import apply_disposal_state, disposal_configuration
+
 FloatArray = NDArray[np.float64]
 
 
@@ -48,6 +52,7 @@ class PhysicsActionReport:
     steps: int
     message: str
     object_path: str | None = None
+    evidence_class: EvidenceClass = EvidenceClass.PHYSICAL_ROBOT_EXECUTION
 
 
 class PhysicsStepper(Protocol):
@@ -451,10 +456,16 @@ class IsaacPhysicsRobotController:
     def remove_to_disposal_zone(
         self, object_path: str, disposal_zone_path: str
     ) -> PhysicsActionReport:
-        from pxr import Gf, Sdf, UsdGeom
+        from pxr import Gf, UsdGeom
 
         target = self.stage.GetPrimAtPath(object_path)
         zone = self.stage.GetPrimAtPath(disposal_zone_path)
+        try:
+            disposition = disposal_configuration(self.stage, disposal_zone_path)
+        except ValueError as error:
+            return PhysicsActionReport(
+                RobotExecutionState.FAILED, False, 0, str(error), object_path
+            )
         removable = target.GetAttribute("rad:manipulation:removable")
         if not removable or not bool(removable.Get()):
             return PhysicsActionReport(
@@ -473,25 +484,23 @@ class IsaacPhysicsRobotController:
             return PhysicsActionReport(
                 RobotExecutionState.FAILED, False, 0, "object is outside disposal zone", object_path
             )
-        source_enabled = target.GetAttribute("rad:source:enabled")
-        if source_enabled:
-            source_enabled.Set(False)
-        disposed = target.GetAttribute("rad:disposal:disposed")
-        if not disposed:
-            disposed = target.CreateAttribute(
-                "rad:disposal:disposed", Sdf.ValueTypeNames.Bool, custom=True
+        try:
+            state_change = apply_disposal_state(self.stage, target, disposition)
+        except ValueError as error:
+            return PhysicsActionReport(
+                RobotExecutionState.FAILED, False, 0, str(error), object_path
             )
-        disposed.Set(True)
-        for attribute_name in (
-            "rad:manipulation:movable",
-            "rad:manipulation:removable",
-        ):
-            attribute = target.GetAttribute(attribute_name)
-            if attribute:
-                attribute.Set(False)
         self._transition(RobotExecutionState.COMPLETE)
         return PhysicsActionReport(
-            self.state, True, 0, "object secured and source disabled in disposal zone", object_path
+            self.state,
+            True,
+            0,
+            (
+                "object secured in explicit shielding; source remains present"
+                if state_change.source_present
+                else "object transferred outside the evaluation domain; source disabled"
+            ),
+            object_path,
         )
 
     def execute_pick_and_place(

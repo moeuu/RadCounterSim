@@ -57,6 +57,36 @@ def test_no_contact_preserves_activity() -> None:
     assert grid.remaining_fraction == 1.0
 
 
+def test_minimum_verified_dwell_delays_treatment_exposure() -> None:
+    grid = _grid()
+    tool = DecontaminationTool(
+        length_m=0.9,
+        width_m=0.9,
+        rate_constant_s_inv=1.0,
+        max_contact_distance_m=0.1,
+        max_surface_speed_m_s=2.0,
+        minimum_contact_dwell_s=0.4,
+    )
+    pending = grid.apply_tool(
+        tool,
+        tool_center_world_m=(0.5, 0.5, 0.02),
+        tool_yaw_rad=0.0,
+        surface_speed_m_s=0.0,
+        dt_s=0.3,
+    )
+    qualified = grid.apply_tool(
+        tool,
+        tool_center_world_m=(0.5, 0.5, 0.02),
+        tool_yaw_rad=0.0,
+        surface_speed_m_s=0.0,
+        dt_s=0.3,
+    )
+    assert pending.removed_activity_bq == 0.0
+    assert pending.effective_dwell_s == 0.0
+    assert qualified.removed_activity_bq > 0.0
+    assert np.isclose(qualified.effective_dwell_s, 0.2)
+
+
 def test_activity_is_monotonic_and_visual_color_tracks_cleaning() -> None:
     grid = _grid()
     previous = grid.total_activity_bq

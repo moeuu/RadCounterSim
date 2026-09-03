@@ -1,0 +1,23 @@
+detector_id: rotating-shield-gamma-counter
+data_status: synthetic_validation_only
+mode: physical_geometry
+energy_bin_edges_keV: [0.0, 400.0, 600.0, 1000.0, 2000.0]
+response_energy_keV: [80.0, 300.0, 661.657, 1500.0]
+effective_area_m2_per_bin:
+  - [0.00018, 0.0, 0.0, 0.0]
+  - [0.00011, 0.0, 0.0, 0.0]
+  - [0.0, 0.0, 0.000075, 0.0]
+  - [0.0, 0.0, 0.0, 0.000035]
+background_cps_per_bin: [0.5, 0.5, 0.5, 0.5]
+dead_time_s: 0.000001
+encoder_noise_std_deg: 0.2
+posture_error_std_deg: 0.1
+program:
+  angles_deg: [0.0, 90.0, 180.0, 270.0]
+  dwell_s: [5.0, 5.0, 5.0, 5.0]
+physical_geometry:
+  detector_prim_path: /World/RotatingShieldRig/Detector
+  shield_rotation_prim_path: /World/RotatingShieldRig/ShieldRotor
+  rotation_attribute: xformOp:rotateZ
+  source_prim_paths:
+    - /World/Source
