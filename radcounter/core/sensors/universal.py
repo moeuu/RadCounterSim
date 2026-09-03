@@ -78,9 +78,7 @@ class ResponseCurve:
         if not math.isfinite(energy_kev):
             raise ValueError("response energy must be finite")
         if energy_kev < self.energies_kev[0] or energy_kev > self.energies_kev[-1]:
-            raise ValueError(
-                f"response curve does not cover incident energy {energy_kev:g} keV"
-            )
+            raise ValueError(f"response curve does not cover incident energy {energy_kev:g} keV")
         return float(np.interp(energy_kev, self.energies_kev, self.values))
 
 
@@ -193,6 +191,39 @@ class IncidentParticleFluence:
         return value / np.linalg.norm(value)
 
 
+def contribution_weighted_sample_without_replacement(
+    weights: Sequence[float],
+    sample_count: int,
+    *,
+    seed: int,
+) -> tuple[int, ...]:
+    """Return a reproducible probability-proportional-to-size sample.
+
+    The Gumbel-top-k construction samples positive-weight indices without
+    replacement. Reusing the same seed gives every source a stable random key,
+    and the selected indices are returned in canonical order so unchanged
+    sample sets do not reshuffle visualization slots.
+    """
+
+    values = np.asarray(weights, dtype=np.float64)
+    if values.ndim != 1:
+        raise ValueError("contribution weights must be one-dimensional")
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < 0:
+        raise ValueError("sample count must be a nonnegative integer")
+    if not np.all(np.isfinite(values)) or np.any(values < 0.0):
+        raise ValueError("contribution weights must be finite and nonnegative")
+    positive_indices = np.flatnonzero(values > 0.0)
+    selected_count = min(sample_count, len(positive_indices))
+    if selected_count == 0:
+        return ()
+
+    uniforms = np.random.default_rng(seed).random(len(values))
+    uniforms = np.clip(uniforms[positive_indices], np.finfo(np.float64).tiny, 1.0)
+    scores = np.log(values[positive_indices]) - np.log(-np.log(uniforms))
+    ranking = np.argsort(-scores, kind="stable")[:selected_count]
+    return tuple(sorted(int(index) for index in positive_indices[ranking]))
+
+
 @dataclass(frozen=True, slots=True)
 class DetectorReading:
     detector_id: str
@@ -250,9 +281,7 @@ class ParametricDetectorModel:
             ideal_cps += cps
             weighted_direction += cps * direction
             ideal_dose_rate += (
-                cps
-                * incident.energy_kev
-                * self.descriptor.dose_conversion_usv_h_per_count_kev
+                cps * incident.energy_kev * self.descriptor.dose_conversion_usv_h_per_count_kev
             )
         dead_time_cps = self._apply_dead_time(ideal_cps)
         measured_cps = dead_time_cps

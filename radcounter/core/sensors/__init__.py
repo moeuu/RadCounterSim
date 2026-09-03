@@ -38,6 +38,7 @@ __all__ = [
     "RotatingShieldMode",
     "ShieldProgram",
     "ShieldProgramMeasurement",
+    "contribution_weighted_sample_without_replacement",
     "load_detector_descriptor",
     "popular_detector_catalog",
 ]
@@ -65,4 +66,5 @@ from .universal import (
     ParticleResponse,
     RadiationType,
     ResponseCurve,
+    contribution_weighted_sample_without_replacement,
 )

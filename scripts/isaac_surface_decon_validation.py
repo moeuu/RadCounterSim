@@ -14,6 +14,7 @@ import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TypedDict
 
 import numpy as np
 
@@ -110,6 +111,7 @@ from radcounter.core.sensors.universal import (
     MeasurementRequest,
     ParametricDetectorModel,
     RadiationType,
+    contribution_weighted_sample_without_replacement,
 )
 from radcounter.core.surface_decontamination import (
     DecontaminationTool,
@@ -131,6 +133,9 @@ HIGH_REACH_ROBOT_PATH = "/World/HighReach10"
 MEASUREMENT_ROBOT_PATH = "/World/H100MeasurementRover"
 H100_DETECTOR_PATH = f"{MEASUREMENT_ROBOT_PATH}/SensorMast/H100"
 H100_DETECTOR_POSITION_WORLD_M = (3.80, -2.30, 2.65)
+CS137_GAMMA_ENERGY_KEV = 661.657
+CS137_GAMMA_YIELD = 0.851
+RADIATION_VISUALIZATION_SAMPLE_SEED = 20_260_903
 DT_S = 1.0 / 60.0
 HEAD_X_M = 0.95
 HEAD_NOZZLE_Z_M = -0.17
@@ -180,9 +185,38 @@ class RobotVisuals:
 @dataclass(frozen=True)
 class RadiationVisuals:
     ray_curves: tuple[object, ...]
-    source_positions_world_m: tuple[tuple[float, float, float], ...]
     photon_points_attr: object
     maximum_ray_count: int
+    initial_total_fluence_rate_m2_s: float
+    initial_maximum_cell_fluence_rate_m2_s: float
+
+
+@dataclass(frozen=True)
+class H100CellContribution:
+    cell_index: int
+    source_position_world_m: tuple[float, float, float]
+    incident_fluence: IncidentParticleFluence
+
+
+@dataclass(frozen=True)
+class RadiationVisualizationFrame:
+    visible_ray_count: int
+    selected_cell_indices: tuple[int, ...]
+    total_fluence_rate_m2_s: float
+    selected_fluence_fraction: float
+
+
+class H100TelemetryRow(TypedDict):
+    video_time_s: float
+    surface_activity_bq: float
+    removed_fraction: float
+    expected_count_rate_cps: float
+    observed_count_rate_cps: float
+    dose_rate_usv_h: float
+    incident_fluence_rate_m2_s: float
+    visible_radiation_paths: float
+    visualized_cell_indices: str
+    visualized_cell_fluence_fraction: float
 
 
 def define_material(
@@ -1059,11 +1093,11 @@ def create_high_wall_surface_source(stage) -> SurfaceSourceGrid:
 
 
 def create_radiation_visualization(stage, grid: SurfaceSourceGrid) -> RadiationVisuals:
-    """Author an explicitly illustrative view of gamma paths to the H100.
+    """Author a detector-contribution-derived view of gamma paths to the H100.
 
-    These curves and travelling points communicate the live source-to-detector
-    relationship. They do not participate in transport or detector response;
-    both continue to use every activity-bearing cell in ``_h100_incident_fluence``.
+    The visible subset is sampled from the same per-cell incident-fluence values
+    submitted to the H100 response. The curves remain a one-way monitor: they
+    never participate in transport or alter the detector calculation.
     """
 
     root_path = "/World/RadiationVisualization"
@@ -1071,39 +1105,66 @@ def create_radiation_visualization(stage, grid: SurfaceSourceGrid) -> RadiationV
     root_prim = root.GetPrim()
     for name, value_type, value in (
         ("rad:role", Sdf.ValueTypeNames.String, "radiation_visualization"),
-        ("rad:visualization:kind", Sdf.ValueTypeNames.String, "illustrative_gamma_paths"),
-        ("rad:visualization:transportCoupled", Sdf.ValueTypeNames.Bool, False),
+        (
+            "rad:visualization:kind",
+            Sdf.ValueTypeNames.String,
+            "contribution_weighted_gamma_paths",
+        ),
+        ("rad:visualization:transportCoupled", Sdf.ValueTypeNames.Bool, True),
+        ("rad:visualization:affectsDetectorResponse", Sdf.ValueTypeNames.Bool, False),
+        (
+            "rad:visualization:samplingMethod",
+            Sdf.ValueTypeNames.String,
+            "deterministic_gumbel_top_k_without_replacement",
+        ),
+        (
+            "rad:visualization:samplingSeed",
+            Sdf.ValueTypeNames.Int,
+            RADIATION_VISUALIZATION_SAMPLE_SEED,
+        ),
         ("rad:visualization:sourcePath", Sdf.ValueTypeNames.String, HIGH_WALL_SOURCE_PATH),
         ("rad:visualization:detectorPath", Sdf.ValueTypeNames.String, H100_DETECTOR_PATH),
     ):
         root_prim.CreateAttribute(name, value_type).Set(value)
 
-    active_indices = np.flatnonzero(grid.initial_activity_bq > 0.0)
-    maximum_ray_count = min(32, len(active_indices))
-    selected_offsets = np.linspace(
-        0,
-        len(active_indices) - 1,
-        maximum_ray_count,
-        dtype=np.int64,
+    initial_contributions = _h100_cell_contributions(grid)
+    maximum_ray_count = min(32, len(initial_contributions))
+    initial_total_fluence_rate = sum(
+        item.incident_fluence.fluence_rate_m2_s for item in initial_contributions
     )
-    selected_indices = active_indices[selected_offsets]
-    source_positions = tuple(
-        tuple(float(value) for value in grid.centers_world_m[index])
-        for index in selected_indices
+    initial_maximum_cell_fluence_rate = max(
+        (item.incident_fluence.fluence_rate_m2_s for item in initial_contributions),
+        default=0.0,
+    )
+    initial_weights = np.zeros(len(grid.activity_bq), dtype=np.float64)
+    initial_contributions_by_index = {}
+    for item in initial_contributions:
+        initial_weights[item.cell_index] = item.incident_fluence.fluence_rate_m2_s
+        initial_contributions_by_index[item.cell_index] = item
+    initial_selected_indices = contribution_weighted_sample_without_replacement(
+        initial_weights,
+        maximum_ray_count,
+        seed=RADIATION_VISUALIZATION_SAMPLE_SEED,
     )
     detector_position = tuple(float(value) for value in H100_DETECTOR_POSITION_WORLD_M)
     ray_curves = []
-    for ray_index, source_position in enumerate(source_positions):
+    for ray_index in range(maximum_ray_count):
+        contribution = initial_contributions_by_index[initial_selected_indices[ray_index]]
+        source_position = contribution.source_position_world_m
         curve = UsdGeom.BasisCurves.Define(stage, f"{root_path}/Paths/Ray_{ray_index:02d}")
         curve.CreateTypeAttr(UsdGeom.Tokens.linear)
         curve.CreateCurveVertexCountsAttr([2])
-        curve.CreatePointsAttr(
-            [Gf.Vec3f(*source_position), Gf.Vec3f(*detector_position)]
-        )
+        curve.CreatePointsAttr([Gf.Vec3f(*source_position), Gf.Vec3f(*detector_position)])
         curve.CreateWidthsAttr([0.015])
         curve.SetWidthsInterpolation(UsdGeom.Tokens.constant)
         curve.CreateDisplayColorAttr([Gf.Vec3f(1.0, 0.42, 0.025)])
         curve.CreateDisplayOpacityAttr([0.32])
+        curve.GetPrim().CreateAttribute(
+            "rad:visualization:sourceCellIndex", Sdf.ValueTypeNames.Int
+        ).Set(contribution.cell_index)
+        curve.GetPrim().CreateAttribute(
+            "rad:visualization:cellFluenceRateM2S", Sdf.ValueTypeNames.Double
+        ).Set(contribution.incident_fluence.fluence_rate_m2_s)
         ray_curves.append(curve)
 
     photons = UsdGeom.Points.Define(stage, f"{root_path}/GammaPhotons")
@@ -1117,9 +1178,10 @@ def create_radiation_visualization(stage, grid: SurfaceSourceGrid) -> RadiationV
     )
     return RadiationVisuals(
         ray_curves=tuple(ray_curves),
-        source_positions_world_m=source_positions,
         photon_points_attr=photon_points_attr,
         maximum_ray_count=maximum_ray_count,
+        initial_total_fluence_rate_m2_s=initial_total_fluence_rate,
+        initial_maximum_cell_fluence_rate_m2_s=initial_maximum_cell_fluence_rate,
     )
 
 
@@ -2212,44 +2274,93 @@ def _update_high_wall_visuals(stage, grid: SurfaceSourceGrid) -> None:
 
 def _update_radiation_visualization(
     visuals: RadiationVisuals,
-    grid: SurfaceSourceGrid,
+    cell_contributions: tuple[H100CellContribution, ...],
+    cell_count: int,
     video_time_s: float,
-) -> int:
-    activity_fraction = float(
-        np.clip(grid.total_activity_bq / max(grid.initial_total_activity_bq, 1e-12), 0.0, 1.0)
+) -> RadiationVisualizationFrame:
+    fluence_weights = np.zeros(cell_count, dtype=np.float64)
+    contributions_by_index: dict[int, H100CellContribution] = {}
+    for item in cell_contributions:
+        fluence_weights[item.cell_index] = item.incident_fluence.fluence_rate_m2_s
+        contributions_by_index[item.cell_index] = item
+    total_fluence_rate = float(np.sum(fluence_weights))
+    fluence_fraction = float(
+        np.clip(
+            total_fluence_rate / max(visuals.initial_total_fluence_rate_m2_s, 1e-12),
+            0.0,
+            1.0,
+        )
     )
-    visible_ray_count = max(
-        2,
-        int(round(visuals.maximum_ray_count * activity_fraction**0.78)),
+    visible_ray_count = (
+        min(
+            len(cell_contributions),
+            max(2, int(round(visuals.maximum_ray_count * fluence_fraction**0.78))),
+        )
+        if cell_contributions
+        else 0
     )
-    opacity = 0.08 + 0.28 * math.sqrt(activity_fraction)
+    selected_cell_indices = contribution_weighted_sample_without_replacement(
+        fluence_weights,
+        visible_ray_count,
+        seed=RADIATION_VISUALIZATION_SAMPLE_SEED,
+    )
+    detector_position = np.asarray(H100_DETECTOR_POSITION_WORLD_M, dtype=np.float64)
+    selected_sources: list[np.ndarray] = []
     for ray_index, curve in enumerate(visuals.ray_curves):
         imageable = UsdGeom.Imageable(curve.GetPrim())
-        if ray_index < visible_ray_count:
+        if ray_index < len(selected_cell_indices):
+            contribution = contributions_by_index[selected_cell_indices[ray_index]]
+            source = np.asarray(contribution.source_position_world_m, dtype=np.float64)
+            selected_sources.append(source)
+            relative_cell_fluence = float(
+                np.clip(
+                    contribution.incident_fluence.fluence_rate_m2_s
+                    / max(visuals.initial_maximum_cell_fluence_rate_m2_s, 1e-12),
+                    0.0,
+                    1.0,
+                )
+            )
             imageable.GetVisibilityAttr().Set(UsdGeom.Tokens.inherited)
-            curve.GetDisplayOpacityAttr().Set([opacity])
+            curve.GetPointsAttr().Set(
+                [
+                    Gf.Vec3f(*(float(value) for value in source)),
+                    Gf.Vec3f(*(float(value) for value in detector_position)),
+                ]
+            )
+            curve.GetDisplayOpacityAttr().Set([0.05 + 0.37 * math.sqrt(relative_cell_fluence)])
+            curve.GetWidthsAttr().Set([0.010 + 0.020 * math.sqrt(relative_cell_fluence)])
+            curve.GetPrim().GetAttribute("rad:visualization:sourceCellIndex").Set(
+                contribution.cell_index
+            )
+            curve.GetPrim().GetAttribute("rad:visualization:cellFluenceRateM2S").Set(
+                contribution.incident_fluence.fluence_rate_m2_s
+            )
         else:
             imageable.GetVisibilityAttr().Set(UsdGeom.Tokens.invisible)
 
-    detector_position = np.asarray(H100_DETECTOR_POSITION_WORLD_M, dtype=np.float64)
     photon_positions = []
-    for ray_index, source_position in enumerate(
-        visuals.source_positions_world_m[:visible_ray_count]
-    ):
-        source = np.asarray(source_position, dtype=np.float64)
+    for ray_index, source in enumerate(selected_sources):
         for pulse_index in range(2):
             phase = (video_time_s * 0.72 + ray_index * 0.173 + pulse_index * 0.5) % 1.0
             position = source + phase * (detector_position - source)
             photon_positions.append(Gf.Vec3f(*(float(value) for value in position)))
     visuals.photon_points_attr.Set(photon_positions)
-    return visible_ray_count
+    selected_fluence_rate = float(np.sum(fluence_weights[list(selected_cell_indices)]))
+    return RadiationVisualizationFrame(
+        visible_ray_count=len(selected_cell_indices),
+        selected_cell_indices=selected_cell_indices,
+        total_fluence_rate_m2_s=total_fluence_rate,
+        selected_fluence_fraction=(
+            selected_fluence_rate / total_fluence_rate if total_fluence_rate > 0.0 else 0.0
+        ),
+    )
 
 
-def _h100_incident_fluence(grid: SurfaceSourceGrid) -> tuple[IncidentParticleFluence, ...]:
-    """Transport the live wall-cell activities to the fixed H100 rover pose."""
+def _h100_cell_contributions(grid: SurfaceSourceGrid) -> tuple[H100CellContribution, ...]:
+    """Transport each live wall cell to the H100 while retaining its identity."""
 
     detector_position = np.asarray(H100_DETECTOR_POSITION_WORLD_M, dtype=np.float64)
-    contributions = []
+    contributions: list[H100CellContribution] = []
     for index, (source_position, activity_bq) in enumerate(
         zip(grid.centers_world_m, grid.activity_bq, strict=True)
     ):
@@ -2260,15 +2371,22 @@ def _h100_incident_fluence(grid: SurfaceSourceGrid) -> tuple[IncidentParticleFlu
         if distance_squared_m2 <= 1e-12:
             continue
         direction = travel / math.sqrt(distance_squared_m2)
+        source_position_world_m = tuple(float(value) for value in source_position)
         contributions.append(
-            IncidentParticleFluence(
-                radiation_type=RadiationType.GAMMA,
-                energy_kev=661.657,
-                fluence_rate_m2_s=(
-                    float(activity_bq) * 0.851 / (4.0 * math.pi * distance_squared_m2)
+            H100CellContribution(
+                cell_index=index,
+                source_position_world_m=source_position_world_m,
+                incident_fluence=IncidentParticleFluence(
+                    radiation_type=RadiationType.GAMMA,
+                    energy_kev=CS137_GAMMA_ENERGY_KEV,
+                    fluence_rate_m2_s=(
+                        float(activity_bq)
+                        * CS137_GAMMA_YIELD
+                        / (4.0 * math.pi * distance_squared_m2)
+                    ),
+                    arrival_direction_world=tuple(float(value) for value in direction),
+                    source_id=f"high_wall_cell_{index:04d}_cs137",
                 ),
-                arrival_direction_world=tuple(float(value) for value in direction),
-                source_id=f"high_wall_cell_{index:04d}_cs137",
             )
         )
     return tuple(contributions)
@@ -2276,7 +2394,7 @@ def _h100_incident_fluence(grid: SurfaceSourceGrid) -> tuple[IncidentParticleFlu
 
 def _measure_h100(
     model: ParametricDetectorModel,
-    grid: SurfaceSourceGrid,
+    cell_contributions: tuple[H100CellContribution, ...],
     frame_index: int,
 ):
     return model.measure(
@@ -2286,7 +2404,7 @@ def _measure_h100(
                 H100_DETECTOR_POSITION_WORLD_M,
                 forward_world=(0.0, 1.0, 0.0),
             ),
-            incident_fluence=_h100_incident_fluence(grid),
+            incident_fluence=tuple(item.incident_fluence for item in cell_contributions),
             integration_time_s=1.0,
             rng=np.random.default_rng(20_260_903 + frame_index),
         )
@@ -2302,7 +2420,7 @@ def _ass_timestamp(seconds: float) -> str:
 
 
 def _write_h100_telemetry(
-    telemetry: list[dict[str, float]],
+    telemetry: list[H100TelemetryRow],
     *,
     fps: int,
     csv_path: Path,
@@ -2315,7 +2433,10 @@ def _write_h100_telemetry(
         "expected_count_rate_cps",
         "observed_count_rate_cps",
         "dose_rate_usv_h",
+        "incident_fluence_rate_m2_s",
         "visible_radiation_paths",
+        "visualized_cell_indices",
+        "visualized_cell_fluence_fraction",
     )
     with csv_path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
@@ -2430,7 +2551,7 @@ def render_high_reach_decontamination_video(
     )
     initial_activity_bq = grid.total_activity_bq
     h100_model = ParametricDetectorModel(popular_detector_catalog()["h3d_h100_omni"])
-    telemetry: list[dict[str, float]] = []
+    telemetry: list[H100TelemetryRow] = []
     previous_target = np.asarray(_high_reach_scan_target(0.0, duration_s), dtype=np.float64)
     active_start_s = min(1.5, duration_s * 0.10)
     active_end_s = duration_s - min(2.0, duration_s * 0.12)
@@ -2454,12 +2575,14 @@ def render_high_reach_decontamination_video(
                 dt_s=5.0 / fps,
             )
             _update_high_wall_visuals(stage, grid)
-        visible_radiation_paths = _update_radiation_visualization(
+        cell_contributions = _h100_cell_contributions(grid)
+        radiation_frame = _update_radiation_visualization(
             radiation_visuals,
-            grid,
+            cell_contributions,
+            len(grid.activity_bq),
             video_time_s,
         )
-        h100_reading = _measure_h100(h100_model, grid, frame_index)
+        h100_reading = _measure_h100(h100_model, cell_contributions, frame_index)
         telemetry.append(
             {
                 "video_time_s": video_time_s,
@@ -2470,7 +2593,12 @@ def render_high_reach_decontamination_video(
                     h100_reading.observed_counts / h100_reading.integration_time_s
                 ),
                 "dose_rate_usv_h": h100_reading.dose_rate_usv_h,
-                "visible_radiation_paths": float(visible_radiation_paths),
+                "incident_fluence_rate_m2_s": radiation_frame.total_fluence_rate_m2_s,
+                "visible_radiation_paths": float(radiation_frame.visible_ray_count),
+                "visualized_cell_indices": ";".join(
+                    str(index) for index in radiation_frame.selected_cell_indices
+                ),
+                "visualized_cell_fluence_fraction": (radiation_frame.selected_fluence_fraction),
             }
         )
         previous_target = target_local
@@ -2558,8 +2686,19 @@ def render_high_reach_decontamination_video(
         "transport_model": "per-cell Cs-137 yield and inverse-square fluence",
         "surface_source": HIGH_WALL_SOURCE_PATH,
         "decontamination_model": "contact-footprint cumulative-exposure decay",
-        "radiation_visualization": "illustrative source-to-detector gamma paths",
-        "radiation_visualization_transport_coupled": False,
+        "radiation_visualization": (
+            "deterministic contribution-weighted sample of per-cell H100 fluence paths"
+        ),
+        "radiation_visualization_sampling": (
+            "Gumbel-top-k probability-proportional-to-fluence without replacement"
+        ),
+        "radiation_visualization_sampling_seed": RADIATION_VISUALIZATION_SAMPLE_SEED,
+        "radiation_visualization_transport_coupled": True,
+        "radiation_visualization_affects_detector_response": False,
+        "initial_visualized_cell_fluence_fraction": telemetry[0][
+            "visualized_cell_fluence_fraction"
+        ],
+        "final_visualized_cell_fluence_fraction": telemetry[-1]["visualized_cell_fluence_fraction"],
         "initial_visible_radiation_paths": int(telemetry[0]["visible_radiation_paths"]),
         "final_visible_radiation_paths": int(telemetry[-1]["visible_radiation_paths"]),
     }

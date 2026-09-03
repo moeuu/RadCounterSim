@@ -29,6 +29,7 @@ from radcounter.core.sensors.universal import (
     MeasurementRequest,
     ParametricDetectorModel,
     RadiationType,
+    contribution_weighted_sample_without_replacement,
 )
 
 
@@ -111,6 +112,28 @@ def test_h3d_h100_scalar_measurement_tracks_decontaminated_activity() -> None:
     assert after.dose_rate_usv_h == pytest.approx(before.dose_rate_usv_h * 0.1, rel=2e-4)
     assert before.estimated_direction_world is None
     assert after.estimated_direction_world is None
+
+
+def test_contribution_weighted_sample_is_reproducible_and_excludes_zero_weight() -> None:
+    weights = (0.0, 1.0, 2.0, 7.0, 0.0)
+    first = contribution_weighted_sample_without_replacement(weights, 3, seed=27)
+    second = contribution_weighted_sample_without_replacement(weights, 3, seed=27)
+    assert first == second
+    assert first == tuple(sorted(first))
+    assert len(first) == len(set(first)) == 3
+    assert set(first) == {1, 2, 3}
+
+
+def test_contribution_weighted_sample_prefers_larger_detector_contributions() -> None:
+    selected_counts = np.zeros(3, dtype=np.int64)
+    for seed in range(400):
+        selected = contribution_weighted_sample_without_replacement(
+            (1.0, 4.0, 16.0),
+            1,
+            seed=seed,
+        )
+        selected_counts[selected[0]] += 1
+    assert selected_counts[2] > selected_counts[1] > selected_counts[0]
 
 
 def test_directional_detector_uses_transport_supplied_arrival_direction() -> None:

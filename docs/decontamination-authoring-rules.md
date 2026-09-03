@@ -160,6 +160,14 @@ truth.
    modify surface geometry, collision, activity, waypoint reachability, contact
    thresholds, or treatment results. It switches once when the controller
    enters the treatment phase; operator camera input cancels automatic tracking.
+5. Radiation paths used to explain a detector reading must be derived one-way
+   from the exact per-source incident-fluence contributions submitted to that
+   detector response on the same simulation tick. When the viewport shows only
+   a subset, sample without replacement in proportion to those contributions,
+   use a fixed documented seed, and record the selected source identities and
+   their share of total incident fluence. Path count and styling may encode the
+   live fluence, but viewport geometry, camera state, frame rate, and sampling
+   must never feed back into transport or detector response.
 
 ## Complex validation environment
 

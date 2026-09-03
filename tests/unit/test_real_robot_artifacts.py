@@ -42,7 +42,14 @@ def test_high_wall_video_places_independent_h100_rover_and_uses_live_source_acti
     assert '"rad:detector:directionality"' in source
     assert '"omnidirectional"' in source
     assert "zip(grid.centers_world_m, grid.activity_bq, strict=True)" in source
-    assert "float(activity_bq) * 0.851 / (4.0 * math.pi * distance_squared_m2)" in source
+    assert "_h100_cell_contributions" in source
+    assert "cell_contributions = _h100_cell_contributions(grid)" in source
+    assert "_measure_h100(h100_model, cell_contributions, frame_index)" in source
+    assert "contribution_weighted_sample_without_replacement" in source
+    assert "visualized_cell_indices" in source
+    assert "visualized_cell_fluence_fraction" in source
+    assert '"rad:visualization:sourceCellIndex"' in source
+    assert '"rad:visualization:cellFluenceRateM2S"' in source
     assert "_write_h100_telemetry" in source
     assert "expected_count_rate_cps" in source
     assert "subtitles=filename=" in source
@@ -51,10 +58,11 @@ def test_high_wall_video_places_independent_h100_rover_and_uses_live_source_acti
     assert "for frame_index in range(0, len(telemetry), hud_update_frames)" in source
     assert "create_radiation_visualization" in source
     assert "_update_radiation_visualization" in source
-    assert '"rad:visualization:transportCoupled"' in source
-    assert "illustrative source-to-detector gamma paths" in source
+    assert '("rad:visualization:transportCoupled", Sdf.ValueTypeNames.Bool, True)' in source
+    assert '("rad:visualization:affectsDetectorResponse", Sdf.ValueTypeNames.Bool, False)' in source
+    assert "contribution_weighted_gamma_paths" in source
     assert "visible_radiation_paths" in source
-    assert "activity_fraction**0.78" in source
+    assert "fluence_fraction**0.78" in source
 
 
 def test_physics_reports_are_explicitly_classified_as_robot_execution() -> None:
