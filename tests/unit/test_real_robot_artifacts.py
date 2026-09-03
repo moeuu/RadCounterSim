@@ -46,6 +46,15 @@ def test_high_wall_video_places_independent_h100_rover_and_uses_live_source_acti
     assert "_write_h100_telemetry" in source
     assert "expected_count_rate_cps" in source
     assert "subtitles=filename=" in source
+    assert "Style: Number,DejaVu Sans Mono" in source
+    assert "hud_update_frames = max(1, int(round(fps / 5.0)))" in source
+    assert "for frame_index in range(0, len(telemetry), hud_update_frames)" in source
+    assert "create_radiation_visualization" in source
+    assert "_update_radiation_visualization" in source
+    assert '"rad:visualization:transportCoupled"' in source
+    assert "illustrative source-to-detector gamma paths" in source
+    assert "visible_radiation_paths" in source
+    assert "activity_fraction**0.78" in source
 
 
 def test_physics_reports_are_explicitly_classified_as_robot_execution() -> None:

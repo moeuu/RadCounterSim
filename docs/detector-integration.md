@@ -40,6 +40,14 @@ updates those same cells.  Consequently the HUD and CSV measurement decline
 comes from the changing simulated source, not from a separately animated
 overlay value.
 
+The video also draws a deliberately illustrative subset of straight gamma
+paths and moving photon markers from the visible wall cells to the H100.  Their
+visible count and opacity scale with the remaining total activity, making the
+radiation field diminish alongside decontamination.  These graphics carry
+`rad:visualization:transportCoupled = false`: they explain the relationship but
+are not transport samples and never feed the detector result.  The detector
+calculation continues to integrate every live activity-bearing wall cell.
+
 ## Rotating physical shielding
 
 `RotatingShieldConfiguration` loads the detector response, posture program,

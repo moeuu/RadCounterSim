@@ -130,7 +130,7 @@ HIGH_WALL_SOURCE_PATH = "/World/ReactorBuilding/ContaminatedHighWall"
 HIGH_REACH_ROBOT_PATH = "/World/HighReach10"
 MEASUREMENT_ROBOT_PATH = "/World/H100MeasurementRover"
 H100_DETECTOR_PATH = f"{MEASUREMENT_ROBOT_PATH}/SensorMast/H100"
-H100_DETECTOR_POSITION_WORLD_M = (3.20, 2.20, 2.65)
+H100_DETECTOR_POSITION_WORLD_M = (3.80, -2.30, 2.65)
 DT_S = 1.0 / 60.0
 HEAD_X_M = 0.95
 HEAD_NOZZLE_Z_M = -0.17
@@ -175,6 +175,14 @@ class RobotVisuals:
     spray_prims: tuple[object, ...]
     seal_color_attr: object
     tether_points_attrs: tuple[object, ...]
+
+
+@dataclass(frozen=True)
+class RadiationVisuals:
+    ray_curves: tuple[object, ...]
+    source_positions_world_m: tuple[tuple[float, float, float], ...]
+    photon_points_attr: object
+    maximum_ray_count: int
 
 
 def define_material(
@@ -1029,7 +1037,7 @@ def create_high_wall_surface_source(stage) -> SurfaceSourceGrid:
 
     raw_colors = grid.color_rgb()
     concrete = np.asarray([0.38, 0.40, 0.39])
-    colors = 0.38 * raw_colors + 0.62 * concrete
+    colors = 0.62 * raw_colors + 0.38 * concrete
     for index, center in enumerate(grid.centers_world_m):
         if grid.activity_bq[index] <= 0.0:
             continue
@@ -1048,6 +1056,71 @@ def create_high_wall_surface_source(stage) -> SurfaceSourceGrid:
         )
         prim.CreateAttribute("rad:decon:enabled", Sdf.ValueTypeNames.Bool).Set(True)
     return grid
+
+
+def create_radiation_visualization(stage, grid: SurfaceSourceGrid) -> RadiationVisuals:
+    """Author an explicitly illustrative view of gamma paths to the H100.
+
+    These curves and travelling points communicate the live source-to-detector
+    relationship. They do not participate in transport or detector response;
+    both continue to use every activity-bearing cell in ``_h100_incident_fluence``.
+    """
+
+    root_path = "/World/RadiationVisualization"
+    root = UsdGeom.Xform.Define(stage, root_path)
+    root_prim = root.GetPrim()
+    for name, value_type, value in (
+        ("rad:role", Sdf.ValueTypeNames.String, "radiation_visualization"),
+        ("rad:visualization:kind", Sdf.ValueTypeNames.String, "illustrative_gamma_paths"),
+        ("rad:visualization:transportCoupled", Sdf.ValueTypeNames.Bool, False),
+        ("rad:visualization:sourcePath", Sdf.ValueTypeNames.String, HIGH_WALL_SOURCE_PATH),
+        ("rad:visualization:detectorPath", Sdf.ValueTypeNames.String, H100_DETECTOR_PATH),
+    ):
+        root_prim.CreateAttribute(name, value_type).Set(value)
+
+    active_indices = np.flatnonzero(grid.initial_activity_bq > 0.0)
+    maximum_ray_count = min(32, len(active_indices))
+    selected_offsets = np.linspace(
+        0,
+        len(active_indices) - 1,
+        maximum_ray_count,
+        dtype=np.int64,
+    )
+    selected_indices = active_indices[selected_offsets]
+    source_positions = tuple(
+        tuple(float(value) for value in grid.centers_world_m[index])
+        for index in selected_indices
+    )
+    detector_position = tuple(float(value) for value in H100_DETECTOR_POSITION_WORLD_M)
+    ray_curves = []
+    for ray_index, source_position in enumerate(source_positions):
+        curve = UsdGeom.BasisCurves.Define(stage, f"{root_path}/Paths/Ray_{ray_index:02d}")
+        curve.CreateTypeAttr(UsdGeom.Tokens.linear)
+        curve.CreateCurveVertexCountsAttr([2])
+        curve.CreatePointsAttr(
+            [Gf.Vec3f(*source_position), Gf.Vec3f(*detector_position)]
+        )
+        curve.CreateWidthsAttr([0.015])
+        curve.SetWidthsInterpolation(UsdGeom.Tokens.constant)
+        curve.CreateDisplayColorAttr([Gf.Vec3f(1.0, 0.42, 0.025)])
+        curve.CreateDisplayOpacityAttr([0.32])
+        ray_curves.append(curve)
+
+    photons = UsdGeom.Points.Define(stage, f"{root_path}/GammaPhotons")
+    photon_points_attr = photons.CreatePointsAttr([])
+    photons.CreateWidthsAttr([0.18])
+    photons.SetWidthsInterpolation(UsdGeom.Tokens.constant)
+    photons.CreateDisplayColorAttr([Gf.Vec3f(1.0, 0.78, 0.04)])
+    photons.CreateDisplayOpacityAttr([0.94])
+    photons.GetPrim().CreateAttribute("rad:visualization:particle", Sdf.ValueTypeNames.String).Set(
+        "Cs-137 661.657 keV gamma"
+    )
+    return RadiationVisuals(
+        ray_curves=tuple(ray_curves),
+        source_positions_world_m=source_positions,
+        photon_points_attr=photon_points_attr,
+        maximum_ray_count=maximum_ray_count,
+    )
 
 
 def create_high_reach_robot(stage, materials) -> dict[str, object]:
@@ -1346,7 +1419,7 @@ def create_h100_measurement_robot(stage, materials) -> dict[str, object]:
     """Build a separate rover carrying an H3D H100-sized detector body."""
 
     root = UsdGeom.Xform.Define(stage, MEASUREMENT_ROBOT_PATH)
-    root.AddTranslateOp().Set(Gf.Vec3d(3.20, 2.20, 0.0))
+    root.AddTranslateOp().Set(Gf.Vec3d(3.80, -2.30, 0.0))
     root_prim = root.GetPrim()
     for name, value_type, value in (
         ("rad:role", Sdf.ValueTypeNames.String, "measurement_robot"),
@@ -2124,7 +2197,7 @@ def _update_high_wall_visuals(stage, grid: SurfaceSourceGrid) -> None:
         out=np.zeros_like(grid.activity_bq),
         where=grid.initial_activity_bq > 0.0,
     )
-    overlay_colors = 0.38 * grid.color_rgb() + 0.62 * concrete
+    overlay_colors = 0.62 * grid.color_rgb() + 0.38 * concrete
     colors = concrete + fraction[:, None] * (overlay_colors - concrete)
     for index in np.flatnonzero(grid.initial_activity_bq > 0.0):
         prim = stage.GetPrimAtPath(f"{HIGH_WALL_SOURCE_PATH}/Cell_{index:04d}")
@@ -2135,6 +2208,41 @@ def _update_high_wall_visuals(stage, grid: SurfaceSourceGrid) -> None:
         )
         UsdGeom.Gprim(prim).GetDisplayColorAttr().Set([Gf.Vec3f(*colors[index])])
         prim.GetAttribute("rad:source:activityBq").Set(float(grid.activity_bq[index]))
+
+
+def _update_radiation_visualization(
+    visuals: RadiationVisuals,
+    grid: SurfaceSourceGrid,
+    video_time_s: float,
+) -> int:
+    activity_fraction = float(
+        np.clip(grid.total_activity_bq / max(grid.initial_total_activity_bq, 1e-12), 0.0, 1.0)
+    )
+    visible_ray_count = max(
+        2,
+        int(round(visuals.maximum_ray_count * activity_fraction**0.78)),
+    )
+    opacity = 0.08 + 0.28 * math.sqrt(activity_fraction)
+    for ray_index, curve in enumerate(visuals.ray_curves):
+        imageable = UsdGeom.Imageable(curve.GetPrim())
+        if ray_index < visible_ray_count:
+            imageable.GetVisibilityAttr().Set(UsdGeom.Tokens.inherited)
+            curve.GetDisplayOpacityAttr().Set([opacity])
+        else:
+            imageable.GetVisibilityAttr().Set(UsdGeom.Tokens.invisible)
+
+    detector_position = np.asarray(H100_DETECTOR_POSITION_WORLD_M, dtype=np.float64)
+    photon_positions = []
+    for ray_index, source_position in enumerate(
+        visuals.source_positions_world_m[:visible_ray_count]
+    ):
+        source = np.asarray(source_position, dtype=np.float64)
+        for pulse_index in range(2):
+            phase = (video_time_s * 0.72 + ray_index * 0.173 + pulse_index * 0.5) % 1.0
+            position = source + phase * (detector_position - source)
+            photon_positions.append(Gf.Vec3f(*(float(value) for value in position)))
+    visuals.photon_points_attr.Set(photon_positions)
+    return visible_ray_count
 
 
 def _h100_incident_fluence(grid: SurfaceSourceGrid) -> tuple[IncidentParticleFluence, ...]:
@@ -2207,6 +2315,7 @@ def _write_h100_telemetry(
         "expected_count_rate_cps",
         "observed_count_rate_cps",
         "dose_rate_usv_h",
+        "visible_radiation_paths",
     )
     with csv_path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames)
@@ -2224,29 +2333,60 @@ def _write_h100_telemetry(
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, "
         "ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, "
         "MarginR, MarginV, Encoding\n"
-        "Style: Monitor,DejaVu Sans,24,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-        "&H00000000,0,0,0,0,100,100,0,0,1,1.5,0,7,34,34,28,1\n\n"
+        "Style: Header,DejaVu Sans,24,&H0053E8FF,&H0053E8FF,&H00000000,"
+        "&H00000000,-1,0,0,0,100,100,0,0,1,1.5,0,7,0,0,0,1\n"
+        "Style: Label,DejaVu Sans,22,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+        "&H00000000,0,0,0,0,100,100,0,0,1,1.5,0,7,0,0,0,1\n"
+        "Style: Number,DejaVu Sans Mono,22,&H0053E8FF,&H0053E8FF,&H00000000,"
+        "&H00000000,-1,0,0,0,100,100,0,0,1,1.5,0,9,0,0,0,1\n\n"
         "[Events]\n"
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
     )
     initial_count_rate = telemetry[0]["expected_count_rate_cps"]
-    events = []
-    for frame_index, row in enumerate(telemetry):
+    video_end = _ass_timestamp(len(telemetry) / fps)
+    static_labels = (
+        ("Header", 34, 27, "H3D H100  |  4PI OMNIDIRECTIONAL CS-137 MONITOR"),
+        ("Label", 760, 27, "WALL SOURCE -> H100"),
+        ("Label", 34, 59, "COUNT RATE"),
+        ("Label", 265, 59, "cps"),
+        ("Label", 350, 59, "DOSE RATE"),
+        ("Label", 575, 59, "uSv/h"),
+        ("Label", 760, 59, "VISIBLE GAMMA PATHS"),
+        ("Label", 34, 88, "SURFACE ACTIVITY"),
+        ("Label", 397, 88, "Bq"),
+        ("Label", 470, 88, "REMOVED"),
+        ("Label", 662, 88, "%"),
+        ("Label", 34, 117, "LIVE RESPONSE DROP"),
+        ("Label", 350, 117, "%"),
+        ("Label", 400, 117, "RESPONSE: SYNTHETIC / BODY + 4PI FOV: H100 SPEC"),
+    )
+    events = [
+        f"Dialogue: 0,0:00:00.00,{video_end},{style},,0,0,0,,"
+        rf"{{\pos({x_position},{y_position})}}{label}"
+        for style, x_position, y_position, label in static_labels
+    ]
+    # Five numeric updates per second remain readable and align exactly with a
+    # 30 fps video. Labels are single, full-duration events, so their glyphs
+    # are never torn down and re-rasterized while the measurements change.
+    hud_update_frames = max(1, int(round(fps / 5.0)))
+    for frame_index in range(0, len(telemetry), hud_update_frames):
+        row = telemetry[frame_index]
         start = _ass_timestamp(frame_index / fps)
-        end = _ass_timestamp((frame_index + 1) / fps - 0.011)
+        end = _ass_timestamp(min(frame_index + hud_update_frames, len(telemetry)) / fps)
         count_drop = 1.0 - row["expected_count_rate_cps"] / max(initial_count_rate, 1e-12)
-        overlay = (
-            r"{\b1\c&H53E8FF&}H3D H100  |  4PI OMNIDIRECTIONAL CS-137 MONITOR{\r}\N"
-            f"COUNT RATE   {row['expected_count_rate_cps']:8.2f} cps"
-            f"    DOSE RATE   {row['dose_rate_usv_h']:7.3f} uSv/h"
-            r"\N"
-            f"SURFACE ACTIVITY   {row['surface_activity_bq']:,.0f} Bq"
-            f"    REMOVED   {row['removed_fraction'] * 100.0:5.1f}%"
-            r"\N"
-            f"LIVE RESPONSE DROP   {max(0.0, count_drop) * 100.0:5.1f}%"
-            r"    RESPONSE: SYNTHETIC / BODY + 4PI FOV: H100 SPEC"
+        values = (
+            (248, 59, f"{row['expected_count_rate_cps']:.2f}"),
+            (558, 59, f"{row['dose_rate_usv_h']:.3f}"),
+            (1035, 59, f"{row['visible_radiation_paths']:.0f}"),
+            (380, 88, f"{row['surface_activity_bq']:,.0f}"),
+            (645, 88, f"{row['removed_fraction'] * 100.0:.1f}"),
+            (333, 117, f"{max(0.0, count_drop) * 100.0:.1f}"),
         )
-        events.append(f"Dialogue: 0,{start},{end},Monitor,,0,0,0,,{overlay}")
+        for x_position, y_position, value in values:
+            events.append(
+                f"Dialogue: 1,{start},{end},Number,,0,0,0,,"
+                rf"{{\pos({x_position},{y_position})}}{value}"
+            )
     subtitle_path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
 
 
@@ -2254,7 +2394,12 @@ def _ffmpeg_filter_path(path: Path) -> str:
     return str(path.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
 
 
-def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGrid) -> dict:
+def render_high_reach_decontamination_video(
+    world,
+    stage,
+    grid: SurfaceSourceGrid,
+    radiation_visuals: RadiationVisuals,
+) -> dict:
     duration_s = float(ARGS.video_seconds)
     fps = int(ARGS.video_fps)
     frame_count = int(round(duration_s * fps))
@@ -2269,8 +2414,8 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
     video_path.unlink(missing_ok=True)
 
     set_camera_view(
-        eye=np.asarray([-7.25, -12.8, 7.35]),
-        target=np.asarray([0.0, 3.55, 5.50]),
+        eye=np.asarray([-11.5, -21.0, 8.4]),
+        target=np.asarray([0.30, 3.30, 5.20]),
         camera_prim_path="/OmniverseKit_Persp",
     )
     for _ in range(90):
@@ -2309,6 +2454,11 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
                 dt_s=5.0 / fps,
             )
             _update_high_wall_visuals(stage, grid)
+        visible_radiation_paths = _update_radiation_visualization(
+            radiation_visuals,
+            grid,
+            video_time_s,
+        )
         h100_reading = _measure_h100(h100_model, grid, frame_index)
         telemetry.append(
             {
@@ -2320,6 +2470,7 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
                     h100_reading.observed_counts / h100_reading.integration_time_s
                 ),
                 "dose_rate_usv_h": h100_reading.dose_rate_usv_h,
+                "visible_radiation_paths": float(visible_radiation_paths),
             }
         )
         previous_target = target_local
@@ -2407,6 +2558,10 @@ def render_high_reach_decontamination_video(world, stage, grid: SurfaceSourceGri
         "transport_model": "per-cell Cs-137 yield and inverse-square fluence",
         "surface_source": HIGH_WALL_SOURCE_PATH,
         "decontamination_model": "contact-footprint cumulative-exposure decay",
+        "radiation_visualization": "illustrative source-to-detector gamma paths",
+        "radiation_visualization_transport_coupled": False,
+        "initial_visible_radiation_paths": int(telemetry[0]["visible_radiation_paths"]),
+        "final_visible_radiation_paths": int(telemetry[-1]["visible_radiation_paths"]),
     }
 
 
@@ -2439,9 +2594,15 @@ def main() -> int:
             grid = create_high_wall_surface_source(stage)
             robot_manifest = create_high_reach_robot(stage, materials)
             measurement_manifest = create_h100_measurement_robot(stage, materials)
+            radiation_visuals = create_radiation_visualization(stage, grid)
             world.reset()
             if ARGS.render_video:
-                video_result = render_high_reach_decontamination_video(world, stage, grid)
+                video_result = render_high_reach_decontamination_video(
+                    world,
+                    stage,
+                    grid,
+                    radiation_visuals,
+                )
                 result = {
                     **video_result,
                     "scene": "13 m reactor-building high-wall decontamination",
