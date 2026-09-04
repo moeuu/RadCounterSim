@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the RadCounterSim vertical slice inside the uv-managed Isaac runtime."""
+"""Run the RadInterAct vertical slice inside the uv-managed Isaac runtime."""
 
 from __future__ import annotations
 

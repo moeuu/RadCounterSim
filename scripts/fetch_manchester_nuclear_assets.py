@@ -20,7 +20,7 @@ DEFAULT_FILE = "500L_Drum_Store.zip"
 
 def _download(url: str, destination: Path) -> None:
     partial = destination.with_suffix(destination.suffix + ".part")
-    request = urllib.request.Request(url, headers={"User-Agent": "RadCounterSim/1.0"})
+    request = urllib.request.Request(url, headers={"User-Agent": "RadInterAct/1.0"})
     with urllib.request.urlopen(request) as response, partial.open("wb") as output:
         shutil.copyfileobj(response, output, length=8 * 1024 * 1024)
     partial.replace(destination)

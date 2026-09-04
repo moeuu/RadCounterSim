@@ -6,7 +6,7 @@ export RADCOUNTER_HOST_ENV_NO_ROS=1
 source "$repository_root/scripts/host_env.sh"
 
 if ! command -v uv >/dev/null 2>&1; then
-  printf '%s\n' "RadCounterSim requires uv: https://docs.astral.sh/uv/" >&2
+  printf '%s\n' "RadInterAct requires uv: https://docs.astral.sh/uv/" >&2
   exit 2
 fi
 if [[ ! -f "$RADCOUNTER_ISAAC_ROOT/uv.lock" ]]; then

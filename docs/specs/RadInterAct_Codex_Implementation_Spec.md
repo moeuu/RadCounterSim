@@ -1,9 +1,9 @@
-# RadCounterSim Implementation Specification
+# RadInterAct Implementation Specification
 
 ## 0. Purpose
 
 This document is the Codex-facing design specification for implementing
-**RadCounterSim**, a closed-loop radiation-source countermeasure simulator that couples
+**RadInterAct**, a closed-loop radiation-source countermeasure simulator that couples
 robot actions with changes in the radiation field on NVIDIA Isaac Sim.
 
 The implementation scope includes all of the following capabilities:
@@ -32,7 +32,7 @@ The implementation scope includes all of the following capabilities:
 
 ### 1.1 Do not fork OceanSim directly
 
-Use OceanSim as a design reference, but implement RadCounterSim as an independent Isaac
+Use OceanSim as a design reference, but implement RadInterAct as an independent Isaac
 Sim extension for the following reasons:
 
 - Keep underwater camera and sonar code separate from radiation transport and
@@ -103,7 +103,7 @@ three layers:
 ## 3. Repository structure
 
 ```text
-RadCounterSim/
+RadInterAct/
 ├── README.md
 ├── LICENSE
 ├── pyproject.toml

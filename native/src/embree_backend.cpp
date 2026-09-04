@@ -597,7 +597,7 @@ private:
 } // namespace
 
 PYBIND11_MODULE(_radcounter_embree, module) {
-  module.doc() = "Embree 4 dynamic segment attenuation backend for RadCounterSim";
+  module.doc() = "Embree 4 dynamic segment attenuation backend for RadInterAct";
   module.def("embree_version", []() { return RTC_VERSION_STRING; });
   py::class_<EmbreeScene>(module, "Scene")
       .def(py::init<>())

@@ -1,6 +1,6 @@
 # Manchester nuclear simulation assets
 
-RadCounterSim can use the University of Manchester's **3D Simulation Assets
+RadInterAct can use the University of Manchester's **3D Simulation Assets
 for Nuclear Environments [Gazebo Format]** as a high-detail visual validation
 scene.
 

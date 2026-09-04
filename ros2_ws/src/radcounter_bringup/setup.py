@@ -16,9 +16,9 @@ setup(
     ],
     install_requires=["setuptools"],
     zip_safe=True,
-    maintainer="RadCounterSim contributors",
+    maintainer="RadInterAct contributors",
     maintainer_email="maintainers@example.invalid",
-    description="ROS 2 Jazzy bringup for RadCounterSim",
+    description="ROS 2 Jazzy bringup for RadInterAct",
     license="BSD-3-Clause",
     entry_points={
         "console_scripts": [

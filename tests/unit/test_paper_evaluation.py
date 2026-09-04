@@ -144,7 +144,7 @@ def _execution_runtime() -> dict[str, object]:
         "python_version": "3.12.12",
         "platform": "Linux-test",
         "numpy_version": "2.5.1",
-        "radcountersim_version": "0.1.0",
+        "radinteract_version": "0.1.0",
         "isaac_sim_version": "6.0.1.0",
         "embree_version": "4.3.0",
         "renderer_mode": "RaytracedLighting",

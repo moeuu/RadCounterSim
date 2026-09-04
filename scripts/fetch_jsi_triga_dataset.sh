@@ -36,7 +36,7 @@ License: BSD 3-Clause
 Source: https://figshare.manchester.ac.uk/articles/dataset/32727696
 
 The dataset remains the work of its original author. It is downloaded into
-.cache and is not redistributed as part of RadCounterSim.
+.cache and is not redistributed as part of RadInterAct.
 EOF
 
 printf 'Dataset ready: %s\n' "${output}"

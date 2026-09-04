@@ -58,7 +58,7 @@ APP = SimulationApp(
         "width": 1280,
         "height": 720,
         "renderer": "RaytracedLighting",
-        "window_title": "RadCounterSim - Physical Shield Placement",
+        "window_title": "RadInterAct - Physical Shield Placement",
     }
 )
 

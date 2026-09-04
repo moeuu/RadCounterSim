@@ -11,7 +11,7 @@ from radcounter.core.experiments.runner import BatchRunner
 
 
 def experiments_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Run RadCounterSim experiment cases")
+    parser = argparse.ArgumentParser(description="Run RadInterAct experiment cases")
     parser.add_argument("--case", choices=sorted(BUILTIN_CASES), action="append")
     parser.add_argument("--seed", type=int, action="append", default=[])
     parser.add_argument("--planner", action="append", default=[])
@@ -30,7 +30,7 @@ def experiments_main(argv: list[str] | None = None) -> int:
 
 
 def report_main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Re-render a RadCounterSim HTML report")
+    parser = argparse.ArgumentParser(description="Re-render a RadInterAct HTML report")
     parser.add_argument("run_directory", type=Path)
     args = parser.parse_args(argv)
     output = render_run_report(args.run_directory, args.run_directory / "report.html")

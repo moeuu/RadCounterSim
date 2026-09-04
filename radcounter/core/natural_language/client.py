@@ -25,7 +25,7 @@ class CommandInterpreter(Protocol):
 
 
 _SYSTEM_PROMPT = """You translate English operator instructions into a
-RadCounterSim command plan. Return only JSON matching the supplied schema. Never invent
+RadInterAct command plan. Return only JSON matching the supplied schema. Never invent
 action IDs, robot IDs, paths, commands, or coordinates. Use execute_candidate only with
 an exact available_actions.action_id. Prefer the shortest plan that completes the request.
 Write the summary in English. If the request is ambiguous or impossible

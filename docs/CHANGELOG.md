@@ -14,7 +14,7 @@
 
 ## Unreleased
 
-- Created the uv-managed independent RadCounterSim repository.
+- Created the uv-managed independent RadInterAct repository.
 - Added Milestone 0 configuration, logging, manifest, CI, and extension
   boundaries.
 - Added initial Milestone 1 data models, material interpolation, analytic

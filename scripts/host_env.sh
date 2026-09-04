@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# RadCounterSim host paths. Source this file from Bash.
+# RadInterAct host paths. Source this file from Bash.
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   printf '%s\n' "source scripts/host_env.sh instead of executing it" >&2

@@ -2,7 +2,7 @@
 <package format="3">
   <name>radcounter_robot_gateway</name>
   <version>0.2.0</version>
-  <description>Nav2, MoveIt 2, gripper, and Isaac command orchestration for RadCounterSim.</description>
+  <description>Nav2, MoveIt 2, gripper, and Isaac command orchestration for RadInterAct.</description>
   <maintainer email="morita@example.com">Eiji Morita</maintainer>
   <license>Apache-2.0</license>
   <buildtool_depend>ament_python</buildtool_depend>

@@ -1,4 +1,4 @@
-# RadCounterSim local inference runtime
+# RadInterAct local inference runtime
 
 This directory is the product-owned runtime layout. Large or platform-specific
 artifacts are deliberately not committed to Git.
@@ -25,7 +25,7 @@ release binaries, then optionally produces a CUDA binary when the CUDA compiler
 is present. The model downloader pins the official Qwen repository revision and
 verifies the complete GGUF SHA-256 before installation.
 
-At runtime RadCounterSim prefers CUDA, falls back to Vulkan GPU offload, and uses
+At runtime RadInterAct prefers CUDA, falls back to Vulkan GPU offload, and uses
 the CPU binary when no GPU is available. Set
 `RADCOUNTER_LLM_GPU_MODE=cpu|hybrid|auto|gpu` to override layer placement. A
 developer may set `RADCOUNTER_LLM_ENDPOINT` to use an already-running loopback

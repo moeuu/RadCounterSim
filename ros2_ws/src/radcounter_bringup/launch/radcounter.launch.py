@@ -1,4 +1,4 @@
-"""Launch the namespaced RadCounterSim ROS bridge."""
+"""Launch the namespaced RadInterAct ROS bridge."""
 
 from pathlib import Path
 

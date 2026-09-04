@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Install a per-user desktop entry for the RadCounterSim launcher."""
+"""Install a per-user desktop entry for the RadInterAct launcher."""
 
 from __future__ import annotations
 
@@ -12,14 +12,14 @@ def main() -> int:
     launcher = root / "scripts/run_app.sh"
     applications = Path.home() / ".local/share/applications"
     applications.mkdir(parents=True, exist_ok=True)
-    desktop = applications / "radcountersim.desktop"
+    desktop = applications / "radinteract.desktop"
     desktop.write_text(
         "\n".join(
             (
                 "[Desktop Entry]",
                 "Type=Application",
                 "Version=1.0",
-                "Name=RadCounterSim",
+                "Name=RadInterAct",
                 "Comment=Radiation measurement and countermeasure simulation",
                 f"Exec={launcher}",
                 f"Path={root}",

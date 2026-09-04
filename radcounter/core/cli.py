@@ -24,7 +24,7 @@ from radcounter.core.sensors import OmnidirectionalCounter
 def validate_main(argv: list[str] | None = None) -> int:
     """Validate one scenario before starting an external simulator."""
 
-    parser = argparse.ArgumentParser(description="Validate a RadCounterSim scenario")
+    parser = argparse.ArgumentParser(description="Validate a RadInterAct scenario")
     parser.add_argument("scenario", type=Path)
     args = parser.parse_args(argv)
     scenario = load_scenario(args.scenario)
@@ -35,7 +35,7 @@ def validate_main(argv: list[str] | None = None) -> int:
 def headless_main(argv: list[str] | None = None) -> int:
     """Run the initial analytic point-source measurement scenario."""
 
-    parser = argparse.ArgumentParser(description="Run a RadCounterSim analytic scenario")
+    parser = argparse.ArgumentParser(description="Run a RadInterAct analytic scenario")
     parser.add_argument("scenario", type=Path)
     args = parser.parse_args(argv)
     scenario_path = args.scenario.resolve()

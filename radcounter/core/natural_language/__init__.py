@@ -1,4 +1,4 @@
-"""Safe natural-language command interpretation for RadCounterSim."""
+"""Safe natural-language command interpretation for RadInterAct."""
 
 from .client import (
     CommandInterpretationError,

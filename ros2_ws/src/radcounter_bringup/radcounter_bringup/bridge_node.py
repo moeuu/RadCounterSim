@@ -1,4 +1,4 @@
-"""ROS 2 actions, services, and topics for RadCounterSim."""
+"""ROS 2 actions, services, and topics for RadInterAct."""
 
 from __future__ import annotations
 
@@ -281,7 +281,7 @@ class AnalyticHostBridge:
 
 
 class RadCounterBridgeNode(Node):
-    """Expose a HostBridge through the public RadCounterSim ROS contract."""
+    """Expose a HostBridge through the public RadInterAct ROS contract."""
 
     def __init__(self, host: HostBridge | None = None) -> None:
         super().__init__("bridge")

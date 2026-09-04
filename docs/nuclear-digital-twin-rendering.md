@@ -4,7 +4,7 @@
 
 OceanSim does not replace Isaac Sim with a separate offline renderer. It uses
 Isaac Sim/Omniverse rendering, real photogrammetric digital twins, calibrated
-sensor image formation, and RTX/Replicator products. RadCounterSim follows the
+sensor image formation, and RTX/Replicator products. RadInterAct follows the
 same division: the facility asset supplies geometric and texture realism, while
 the simulator supplies physically meaningful lighting, sensor effects, robot
 motion, and radiation state.
@@ -26,7 +26,7 @@ The visual twin and the physical twin are deliberately separate.
 
 `asset.visual_uri` accepts native USD directly. OBJ, FBX, glTF, GLB, DAE, STL,
 and PLY are converted by Omni Asset Converter with materials and external
-textures preserved. A RadCounterSim environment `manifest.json` can be used as a
+textures preserved. A RadInterAct environment `manifest.json` can be used as a
 visual fallback, but it has geometry and PBR fallback materials rather than the
 original photogrammetry texture set.
 

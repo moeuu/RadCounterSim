@@ -1,4 +1,4 @@
-"""Composable environment, robot, and detector selections for RadCounterSim."""
+"""Composable environment, robot, and detector selections for RadInterAct."""
 
 from __future__ import annotations
 
@@ -277,7 +277,7 @@ def default_selection_path() -> Path:
     if override:
         return Path(override).expanduser().resolve()
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    return config_home / "radcountersim/system-selection.json"
+    return config_home / "radinteract/system-selection.json"
 
 
 def load_system_catalog(path: str | Path | None = None) -> tuple[Path, SystemCatalog]:

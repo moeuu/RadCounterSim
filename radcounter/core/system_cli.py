@@ -38,7 +38,7 @@ def _resolve(args: argparse.Namespace):
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Switch RadCounterSim environments, robots, and detectors"
+        description="Switch RadInterAct environments, robots, and detectors"
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 

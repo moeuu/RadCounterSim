@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "RadCounterSim physical validation metadata",
+  "title": "RadInterAct physical validation metadata",
   "type": "object",
   "required": ["evidence_kind", "source", "detector", "geometry", "environment"],
   "properties": {

@@ -36,4 +36,4 @@ per prop because body clearance and loaded manipulator reach differ; a global
 fallback is not used.
 
 The definitive attribute list is preserved in
-`docs/specs/RadCounterSim_Codex_Implementation_Spec.md`.
+`docs/specs/RadInterAct_Codex_Implementation_Spec.md`.

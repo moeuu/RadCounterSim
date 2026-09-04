@@ -261,7 +261,7 @@ def _validated_execution_runtime(payload: Mapping[str, Any]) -> dict[str, Any]:
         "python_version",
         "platform",
         "numpy_version",
-        "radcountersim_version",
+        "radinteract_version",
         "isaac_sim_version",
         "embree_version",
         "renderer_mode",

@@ -1,7 +1,7 @@
 # Third-party notices
 
-RadCounterSim is distributed under the BSD 3-Clause License in `LICENSE`.
-That license covers RadCounterSim's own source code only.
+RadInterAct is distributed under the BSD 3-Clause License in `LICENSE`.
+That license covers RadInterAct's own source code only.
 
 ## Architectural reference
 
@@ -16,7 +16,7 @@ repository.
 ## External runtimes and libraries
 
 The following independently distributed software can be used by
-RadCounterSim. It is not relicensed by RadCounterSim, and is not included in
+RadInterAct. It is not relicensed by RadInterAct, and is not included in
 this repository unless a file explicitly states otherwise.
 
 - NVIDIA Isaac Sim and Omniverse Kit: governed by NVIDIA's applicable license

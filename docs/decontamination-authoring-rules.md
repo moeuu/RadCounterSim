@@ -11,12 +11,12 @@ The authoritative visual and behavioral references are:
 
 - `scripts/isaac_shield_placement_video.py`, especially
   `author_irregular_drum_surface_source`, and
-  `/home/moeu/Pictures/Research/RadCounterSim/manipulator_surface_source_shield_video_20260806/manipulator_surface_source_shield_placement_20s.mp4`.
+  `/home/moeu/Pictures/Research/RadInterAct/manipulator_surface_source_shield_video_20260806/manipulator_surface_source_shield_placement_20s.mp4`.
   The recorded source has 252 active faces selected from 968 candidates.
 - `scripts/isaac_surface_decon_validation.py`, especially `activity_field`,
   `create_high_wall_surface_source`, `_high_reach_scan_target`, and
   `render_high_reach_decontamination_video`, and
-  `/home/moeu/Pictures/Research/RadCounterSim/high_reach_wall_decontamination_video_20260806/high_reach_wall_decontamination_20s.mp4`.
+  `/home/moeu/Pictures/Research/RadInterAct/high_reach_wall_decontamination_video_20260806/high_reach_wall_decontamination_20s.mp4`.
   The recorded 20-second run reduced activity from 61,772,808.55 Bq to
   6,670,376.89 Bq (89.20% removed).
 

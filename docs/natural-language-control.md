@@ -1,13 +1,13 @@
 # Natural-language application control
 
-RadCounterSim accepts English instructions through one local,
+RadInterAct accepts English instructions through one local,
 schema-constrained command surface. The language model proposes a plan; it
 never receives direct Python, shell, USD, or robot-controller access.
 
 ## Product architecture
 
 ```text
-RadCounterSim UI
+RadInterAct UI
   -> public scene/action snapshot
   -> loopback OpenAI-compatible request
   -> bundled llama.cpp + Qwen3-4B GGUF
@@ -16,20 +16,20 @@ RadCounterSim UI
   -> existing Isaac workflow services
 ```
 
-The final package uses the user's separately installed Isaac Sim. RadCounterSim
+The final package uses the user's separately installed Isaac Sim. RadInterAct
 owns and starts `llama-server` as a hidden child process, selects the packaged
 CPU, Vulkan, or CUDA binary, assigns a random loopback port, waits for its
 health check, and stops it with the application. No Ollama daemon, Python
 inference library, PyTorch installation, API key, or internet connection is
 required after the release assets are installed.
 
-RadCounterSim is BSD-licensed, but its OSS status does not change NVIDIA's
+RadInterAct is BSD-licensed, but its OSS status does not change NVIDIA's
 terms. The package deliberately does not contain Isaac Sim or Omniverse Kit;
 each operator installs and accepts the terms for their own copy. NVIDIA's
 [Isaac Sim license FAQ](https://docs.isaacsim.omniverse.nvidia.com/6.0.1/common/license-faq.html)
 states that internal R&D use is free, while redistributing Isaac Sim with
 Omniverse Kit to third parties requires NVIDIA AI Enterprise licensing. A
-future all-in-one RadCounterSim installer must therefore keep this same
+future all-in-one RadInterAct installer must therefore keep this same
 user-installed-Isaac boundary unless separate redistribution rights are
 obtained.
 

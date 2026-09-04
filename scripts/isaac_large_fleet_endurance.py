@@ -347,7 +347,7 @@ OVERVIEW_CAMERA.CreateClippingRangeAttr(Gf.Vec2f(0.1, 5000.0))
 SURVEY_VIEWPORT = ViewportManager.get_viewport_api("Viewport")
 if SURVEY_VIEWPORT is None:
     SURVEY_VIEWPORT = ViewportManager.create_viewport_window(
-        title="RadCounterSim Survey",
+        title="RadInterAct Survey",
         resolution=(int(VIEWPORT["width_px"]), int(VIEWPORT["height_px"])),
         camera="/OmniverseKit_Persp",
     ).viewport_api
@@ -436,7 +436,7 @@ GOVERNOR = AdaptiveWorkloadGovernor(
 )
 GATES = RateGate()
 
-window = ui.Window("RadCounterSim Endurance", width=430, height=310)
+window = ui.Window("RadInterAct Endurance", width=430, height=310)
 with window.frame, ui.VStack(spacing=5):
     ui.Label("4 km x 4 km survey: PackBot + Elios 3 RAD")
     phase_label = ui.Label("Starting")

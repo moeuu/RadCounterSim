@@ -190,7 +190,7 @@ class EnvironmentImportConfig(_FrozenModel):
     cad_mesh_size_m: float = Field(default=0.05, gt=0.0)
     model_search_paths: tuple[str, ...] = ()
     package_search_paths: tuple[str, ...] = ()
-    cache_directory: str = "~/.cache/radcountersim/environments"
+    cache_directory: str = "~/.cache/radinteract/environments"
     external_converter: ExternalConverterConfig | None = None
 
     @field_validator("expected_sha256")

@@ -1,4 +1,4 @@
-# RadCounterSim — Staged Codex Implementation Prompts
+# RadInterAct — Staged Codex Implementation Prompts
 
 ## How to use this document
 
@@ -10,7 +10,7 @@ the API of the targeted Isaac Sim version, record design changes in
 Instructions common to every milestone:
 
 ```text
-- Treat RadCounterSim_Codex_Implementation_Spec.md as the highest-level specification.
+- Treat RadInterAct_Codex_Implementation_Spec.md as the highest-level specification.
 - Do not modify unrelated existing code.
 - Add type annotations and docstrings to public APIs.
 - Include units in variable names.
@@ -26,7 +26,7 @@ Instructions common to every milestone:
 ## Prompt 0 — Repository and extension scaffold
 
 ```text
-Implement Milestone 0 of RadCounterSim_Codex_Implementation_Spec.md.
+Implement Milestone 0 of RadInterAct_Codex_Implementation_Spec.md.
 
 Requirements:
 1. Use the UI extension and C++ extension templates from an Isaac Sim 6.0.1 source workspace.
@@ -43,7 +43,7 @@ Acceptance criteria:
 - The extension startup test passes.
 - A non-empty pytest suite passes.
 - The sample scenario validates.
-- The RadCounterSim example appears in the GUI.
+- The RadInterAct example appears in the GUI.
 ```
 
 ## Prompt 1 — Core models and analytic radiation backend

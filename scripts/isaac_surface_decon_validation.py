@@ -90,7 +90,7 @@ simulation_app = SimulationApp(
         "width": 1440,
         "height": 900,
         "renderer": "RaytracedLighting",
-        "window_title": "RadCounterSim - Arounder-Type Remote Water Decontamination",
+        "window_title": "RadInterAct - Arounder-Type Remote Water Decontamination",
     }
 )
 
@@ -1190,7 +1190,7 @@ def create_high_reach_robot(stage, materials) -> dict[str, object]:
 
     The architecture is derived from SUPER-Giraffe's telescopic-ladder,
     outrigger, and distal-manipulator layout, but the sixth ladder stage and
-    10 m reach envelope are RadCounterSim research extensions rather than a
+    10 m reach envelope are RadInterAct research extensions rather than a
     claim about the manufacturer's 8 m machine.
     """
 

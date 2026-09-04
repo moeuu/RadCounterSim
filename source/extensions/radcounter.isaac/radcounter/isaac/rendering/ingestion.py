@@ -53,7 +53,7 @@ class DigitalTwinIngestor:
             if local is None or suffix not in self._CONVERTIBLE_SUFFIXES:
                 raise ValueError(
                     "The visual twin must be USD, a DCC mesh supported by Omni asset converter, "
-                    "or a RadCounterSim environment manifest. CAD/BIM/LiDAR sources should first "
+                    "or a RadInterAct environment manifest. CAD/BIM/LiDAR sources should first "
                     "be normalized with radcounter-import-environment."
                 )
             mounted_uri = str(await self._convert_to_usd(local, config))

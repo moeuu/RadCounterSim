@@ -1,6 +1,6 @@
 # Configurable robot fleets and sensor rigs
 
-RadCounterSim separates the vehicle asset from its sensor rig. One fleet can
+RadInterAct separates the vehicle asset from its sensor rig. One fleet can
 contain wheeled, tracked, holonomic, articulated, quadruped, floating, and
 aerial robots. Every robot can carry any number of LiDARs, cameras, radiation
 detectors, or project-specific sensors.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the self-contained RadCounterSim vertical-slice assets."""
+"""Generate the self-contained RadInterAct vertical-slice assets."""
 
 from __future__ import annotations
 

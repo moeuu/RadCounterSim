@@ -40,7 +40,7 @@ simulation_app = SimulationApp(
         "width": 1280,
         "height": 800,
         "renderer": "RaytracedLighting",
-        "window_title": "RadCounterSim Multi-Detector Shield and Decon Validation",
+        "window_title": "RadInterAct Multi-Detector Shield and Decon Validation",
     }
 )
 

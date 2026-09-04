@@ -3,7 +3,7 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "radcountersim"
+name = "radinteract"
 version = "0.1.0"
 description = "Scene-consistent radiological measurement and robotic intervention simulation"
 readme = "README.md"

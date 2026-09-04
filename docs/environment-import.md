@@ -1,6 +1,6 @@
 # External 3D environments
 
-RadCounterSim accepts simulator-neutral maps and CAD geometry. Every imported
+RadInterAct accepts simulator-neutral maps and CAD geometry. Every imported
 environment is normalized to metres, a right-handed coordinate system, and
 Z-up before the same triangles are sent to USD rendering, static PhysX
 collision, and Embree radiation transport.
@@ -58,7 +58,7 @@ also documents its native SolidWorks-to-USD conversion there. On Linux this is
 performed by the HOOPS Exchange converter bundled with Isaac Sim; `.SLDASM`
 and `.SLDPRT` are not passed to the simulator as if they were portable meshes.
 
-In the RadCounterSim Operations window, operators select an environment, robot
+In the RadInterAct Operations window, operators select an environment, robot
 set, and detector set by display name and press **Apply selected configuration**.
 No catalog ID, file path, or CLI knowledge is needed for normal operation.
 Invalid detector/robot combinations are rejected before the stage changes.
@@ -124,7 +124,7 @@ reliable convention should set units and axes explicitly. A left-handed input
 is reflected and its triangle winding is reversed.
 
 Visual material names do not define gamma attenuation. `material_rules` maps
-mesh, node, or prim names to RadCounterSim material IDs; unmatched geometry uses
+mesh, node, or prim names to RadInterAct material IDs; unmatched geometry uses
 `default_material_id`. This prevents a visually grey CAD wall from silently
 being treated as air.
 

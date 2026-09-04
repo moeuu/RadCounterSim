@@ -2,8 +2,8 @@
 <package format="3">
   <name>radcounter_msgs</name>
   <version>0.1.0</version>
-  <description>RadCounterSim radiation measurement and countermeasure interfaces.</description>
-  <maintainer email="maintainers@example.invalid">RadCounterSim contributors</maintainer>
+  <description>RadInterAct radiation measurement and countermeasure interfaces.</description>
+  <maintainer email="maintainers@example.invalid">RadInterAct contributors</maintainer>
   <license>BSD-3-Clause</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <build_depend>geometry_msgs</build_depend>

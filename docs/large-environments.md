@@ -1,6 +1,6 @@
 # Large environment streaming
 
-RadCounterSim stores large environments as spatial tiles with independent LOD
+RadInterAct stores large environments as spatial tiles with independent LOD
 payloads. The complete site is never required in the Isaac Sim working set.
 
 ## Data path

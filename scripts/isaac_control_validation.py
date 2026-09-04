@@ -49,7 +49,7 @@ simulation_app = SimulationApp(
         "width": 1280,
         "height": 800,
         "renderer": "RaytracedLighting",
-        "window_title": "RadCounterSim Multi-Input Robot Validation",
+        "window_title": "RadInterAct Multi-Input Robot Validation",
     }
 )
 

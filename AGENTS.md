@@ -1,4 +1,4 @@
-# RadCounterSim repository instructions
+# RadInterAct repository instructions
 
 ## Surface sources and decontamination
 

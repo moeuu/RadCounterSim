@@ -243,7 +243,7 @@ def _required_package_version(distribution: str) -> str:
 
 def _project_version() -> str:
     try:
-        return version("radcountersim")
+        return version("radinteract")
     except PackageNotFoundError as error:
         payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
         project = payload.get("project")
@@ -302,7 +302,7 @@ def _physical_execution_runtime() -> dict[str, Any]:
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "numpy_version": _required_package_version("numpy"),
-        "radcountersim_version": _project_version(),
+        "radinteract_version": _project_version(),
         "isaac_sim_version": _required_package_version("isaacsim"),
         "embree_version": embree_version,
         "renderer_mode": renderer_mode,

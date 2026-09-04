@@ -1,6 +1,6 @@
 # JSI TRIGA Mark II measured survey
 
-RadCounterSim uses the public May 2026 survey of the Jožef Stefan Institute
+RadInterAct uses the public May 2026 survey of the Jožef Stefan Institute
 TRIGA Mark II research reactor as its measured nuclear-facility validation
 scene. The survey was acquired by a modified Clearpath Jackal and includes a
 53,529-point colored 3D LiDAR map, a 2D SLAM map, and co-registered radiation

@@ -1,1 +1,1 @@
-"""RadCounterSim ROS 2 robot gateway."""
+"""RadInterAct ROS 2 robot gateway."""

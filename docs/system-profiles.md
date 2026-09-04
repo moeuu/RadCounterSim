@@ -1,10 +1,10 @@
 # Switchable environments, robots, and detectors
 
-RadCounterSim keeps environments, robot sets, and detector sets independent in
+RadInterAct keeps environments, robot sets, and detector sets independent in
 `configs/system/catalog.yaml`. A profile is only a named combination of those
 three components plus a radiation runtime configuration. The active selection
 is stored outside the repository by default at
-`~/.config/radcountersim/system-selection.json`.
+`~/.config/radinteract/system-selection.json`.
 
 The normal operator path is the **SYSTEM CONFIGURATION** section in the
 Isaac Operations window. Choose a preset, or change Environment, Robot, and
@@ -69,7 +69,7 @@ not silently author the vertical-slice-only room, source, or task geometry.
 ## Fukushima Daiichi SolidWorks environment
 
 The upstream repository contains SolidWorks `.SLDASM` and `.SLDPRT` files only.
-RadCounterSim converts the native top-level assembly directly to USD on Linux
+RadInterAct converts the native top-level assembly directly to USD on Linux
 with the HOOPS Exchange converter bundled with Isaac Sim 6.0.1. This preserves
 the assembly hierarchy and avoids a Windows or STEP prerequisite.
 
@@ -108,7 +108,7 @@ the assembly hierarchy and avoids a Windows or STEP prerequisite.
 
 The normalized manifest and composed USD stage are content-addressed below the
 configured environment cache (by default
-`~/.cache/radcountersim/environments`). The same imported triangles are used for visible USD
+`~/.cache/radinteract/environments`). The same imported triangles are used for visible USD
 geometry, static PhysX collision, and radiation material geometry. The
 Fukushima profile adds no contamination surface or hidden regular proxy. Any
 later contamination authoring must still follow

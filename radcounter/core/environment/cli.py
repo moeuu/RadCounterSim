@@ -19,7 +19,7 @@ from radcounter.core.environment.pipeline import EnvironmentImportPipeline
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Normalize a 3D environment for RadCounterSim, PhysX, and Embree"
+        description="Normalize a 3D environment for RadInterAct, PhysX, and Embree"
     )
     parser.add_argument("source", type=Path, help="3D file or environment descriptor YAML/JSON")
     parser.add_argument(

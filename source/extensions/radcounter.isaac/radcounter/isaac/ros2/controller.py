@@ -53,7 +53,7 @@ class DoseMapResult:
 
 
 class Ros2RobotController:
-    """Call RadCounterSim actions/services through an externally spun ROS node."""
+    """Call RadInterAct actions/services through an externally spun ROS node."""
 
     def __init__(self, node: Any, *, namespace: str, timeout_s: float) -> None:
         modules = require_ros2_runtime()

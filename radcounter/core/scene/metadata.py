@@ -1,4 +1,4 @@
-"""Typed, Isaac-independent representation of RadCounterSim USD metadata."""
+"""Typed, Isaac-independent representation of RadInterAct USD metadata."""
 
 from __future__ import annotations
 

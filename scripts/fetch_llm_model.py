@@ -73,7 +73,7 @@ def main() -> int:
 
     temporary = destination.with_suffix(destination.suffix + ".part")
     offset = temporary.stat().st_size if temporary.is_file() else 0
-    request = Request(MODEL_URL, headers={"User-Agent": "RadCounterSim/0.1"})
+    request = Request(MODEL_URL, headers={"User-Agent": "RadInterAct/0.1"})
     if offset:
         request.add_header("Range", f"bytes={offset}-")
     response = urlopen(request, timeout=120)  # noqa: S310

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch the complete articulated RadCounterSim GUI workflow."""
+"""Launch the complete articulated RadInterAct GUI workflow."""
 
 from __future__ import annotations
 

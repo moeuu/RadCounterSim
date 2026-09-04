@@ -387,7 +387,7 @@ def load_environment_manifest(path: str | Path) -> EnvironmentImportResult:
     manifest_path = Path(path).expanduser().resolve()
     raw = json.loads(manifest_path.read_text(encoding="utf-8"))
     if raw.get("schema_version") != "1.0" or "meshes" not in raw:
-        raise ValueError(f"not a RadCounterSim environment manifest: {manifest_path}")
+        raise ValueError(f"not a RadInterAct environment manifest: {manifest_path}")
     config = EnvironmentImportConfig.model_validate(raw["resolved_import_config"])
     normalized_name = raw.get("normalized_mesh_path")
     arrays = None

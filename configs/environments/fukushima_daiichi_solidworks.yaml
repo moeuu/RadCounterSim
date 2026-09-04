@@ -34,6 +34,6 @@ environment:
     show_collision_geometry: false
   max_triangles: 8000000
   cad_mesh_size_m: 0.10
-  cache_directory: ~/.cache/radcountersim/environments
+  cache_directory: ~/.cache/radinteract/environments
   streaming:
     enabled: false

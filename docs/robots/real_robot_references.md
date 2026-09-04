@@ -1,6 +1,6 @@
 # Bundled real-robot references
 
-RadCounterSim's bundled robots must be traceable to a real machine. A bundled
+RadInterAct's bundled robots must be traceable to a real machine. A bundled
 sample may use manufacturer CAD, licensed CAD, or an original procedural model
 derived from published dimensions and mechanisms. It may not use an anonymous
 box or generic quadrotor while presenting it as task-valid evidence.

@@ -28,4 +28,4 @@ environment:
   cad_mesh_size_m: 0.05
   model_search_paths: []
   package_search_paths: []
-  cache_directory: ~/.cache/radcountersim/environments
+  cache_directory: ~/.cache/radinteract/environments
