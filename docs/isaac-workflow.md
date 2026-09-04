@@ -74,3 +74,33 @@ uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked python scripts/run_gui_valida
 
 That gate requires all eight operations and all final invariants to pass without
 operation-time pose teleports.
+
+## Fukushima CAD decontamination video
+
+The dedicated recorder composes the catalog-selected Fukushima Daiichi building
+CAD with the official Ridgeback+Franka and Nova Carter assets. It moves both
+robots on the supported lower cut face, performs a contact-verified raster over
+the same irregular planar source used for activity accounting, and records the
+H3D H100 response from live per-face Cs-137 fluence contributions:
+
+```bash
+export OMNI_KIT_ACCEPT_EULA=YES
+source scripts/host_env.sh
+uv run --project "$RADCOUNTER_ISAAC_ROOT" --locked python \
+  scripts/isaac_fukushima_decon_video.py --headless \
+  --output artifacts/fukushima-decontamination-video
+```
+
+The 24-second edit balances whole-building/work-area overhead views and interior
+contact views. Blue and orange routes, contribution-weighted source-to-H100
+paths, and a persistent whole-building locator keep the operation readable from
+above. HUD labels remain fixed while only numeric values update every 0.5 s.
+
+The imported CAD remains present in transport and collision. During action
+shots, its single outer structure mesh receives a translucent render-only
+material so the lower work face is visible. An invisible CAD-aligned support
+collider bridges one-sided lower-shell triangles for the free wheeled robot; it
+does not replace the 995 imported CAD transport geometries. The output
+`result.json` audits collision preservation, both articulated motions, contact
+counts, activity balance, detector-distance preservation, the overview/interior
+ratio, and the CC BY 4.0 upstream provenance.

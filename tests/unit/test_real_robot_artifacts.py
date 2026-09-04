@@ -65,6 +65,28 @@ def test_high_wall_video_places_independent_h100_rover_and_uses_live_source_acti
     assert "fluence_fraction**0.78" in source
 
 
+def test_fukushima_video_uses_imported_cad_articulated_robots_and_coupled_h100_paths() -> None:
+    source = (ROOT / "scripts/isaac_fukushima_decon_video.py").read_text(encoding="utf-8")
+    assert '"fukushima-daiichi"' in source
+    assert "prepare_environment_stage" in source
+    assert "RidgebackFrankaController" in source
+    assert "NovaCarterController" in source
+    assert "ContactDrivenDecontaminator" in source
+    assert "IncidentParticleFluence" in source
+    assert "contribution_weighted_sample_without_replacement" in source
+    assert '"rad:visualization:transportCoupled", Sdf.ValueTypeNames.Bool, True' in source
+    assert '"rad:visualization:affectsDetectorResponse", Sdf.ValueTypeNames.Bool, False' in source
+    assert "source_x - 0.90" in source
+    assert "set_work_area_cutaway" in source
+    assert 'path = "/World/CADAlignedRobotSupport"' in source
+    assert "self.view_mode = VIEW_OVERHEAD_JA" in source
+    assert "self.view_mode = VIEW_INTERIOR_JA" in source
+    assert "0.40 <= overview_fraction <= 0.60" in source
+    assert "update_seconds = 0.50" in source
+    assert "CAD OVERVIEW  /  WORK AREA: LOWER CUT FACE" in source
+    assert "fixed phase and numeric HUD" in source
+
+
 def test_physics_reports_are_explicitly_classified_as_robot_execution() -> None:
     from radcounter.isaac.robot import (
         ArticulatedTaskReport,
